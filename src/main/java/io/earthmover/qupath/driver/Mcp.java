@@ -154,7 +154,8 @@ class Mcp {
                         Wait until `text` appears in (or, with gone=true, disappears from) the qupath_describe output; return that output.
 
                         `window` is a title substring, as in qupath_describe. With no `window` it watches all open windows and the \
-                        main-window summary, so it also detects an image switch by the image path. Fails on timeout with the last output. \
+                        main-window summary, so it also detects an image switch by the image path. Every row of tables, lists and trees is \
+                        searched, not only the rows qupath_describe prints. Fails on timeout with the last output. \
 Both results end with "Opened while waiting:" and the outline of any window that opened meanwhile (for example a warning).""",
                         """
                         {"text":{"description":"Text to wait for in the qupath_describe output","type":"string"},"window":{"description":"Title substring; omit to watch all windows and the main-window summary","type":"string"},"timeout_s":{"description":"Seconds to wait before failing","type":"number","default":30},\
@@ -165,14 +166,16 @@ Both results end with "Opened while waiting:" and the outline of any window that
                             long deadline = System.nanoTime() + (long) (timeout * 1e9);
                             var before = driver.windowsNow();
                             while (true) {
-                                var out = driver.outline(str(a, "window"), 0, 20);
-                                boolean done = out.contains(text) != gone;
+                                // Matched against every row, so an item far down a long table counts once it is there.
+                                boolean done = driver.outline(str(a, "window"), 0, Integer.MAX_VALUE).contains(text) != gone;
                                 if (done || System.nanoTime() >= deadline) {
+                                    var out = driver.outline(str(a, "window"), 0, 20);
                                     var opened = driver.openedSince(before);
                                     out += opened.isEmpty() ? "" : "\n\nOpened while waiting:\n" + opened;
                                     if (done)
                                         return text(out);
-                                    throw new Exception("Timed out after %ss waiting for '%s' to %s; last output:\n%s".formatted(
+                                    throw new Exception(("Timed out after %ss waiting for '%s' to %s; every row of every table, "
+                                            + "list and tree was searched. Last output, first 20 rows of each:\n%s").formatted(
                                             timeout, text, gone ? "disappear" : "appear", out));
                                 }
                                 Thread.sleep(500);

@@ -102,19 +102,31 @@ class Indicator {
         hideLater(pointer, Duration.millis(delayMs.get()).add(POINTER_HOLD));
     }
 
+    static boolean paced() {
+        return mode.get() == Mode.PACED;
+    }
+
     /** In paced mode, shows {@code action} (a menu path, say) at the top of the main window and waits {@link #delayMs}. */
     void before(String action) {
         if (mode.get() != Mode.PACED)
             return;
-        pace(() -> {
-            var o = overlay(qupath.getStage().getScene());
-            if (o == null)
-                return;
-            var pill = pill(action);
-            pill.relocate(12, 6);
-            o.getChildren().add(pill);
-            fadeOut(pill, Duration.millis(delayMs.get()));
-        });
+        pace(() -> showAction(action));
+    }
+
+    /** In paced mode, shows {@code action} at the top of the main window for {@link #delayMs}, without waiting. */
+    void announce(String action) {
+        if (mode.get() == Mode.PACED)
+            run(() -> showAction(action));
+    }
+
+    private void showAction(String action) {
+        var o = overlay(qupath.getStage().getScene());
+        if (o == null)
+            return;
+        var pill = pill(action);
+        pill.relocate(12, 6);
+        o.getChildren().add(pill);
+        fadeOut(pill, Duration.millis(delayMs.get()));
     }
 
     /** How long a mark stays before fading: in paced mode at least the delay, so it lasts until the next action starts. */

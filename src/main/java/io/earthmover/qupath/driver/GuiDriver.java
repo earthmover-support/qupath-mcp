@@ -608,7 +608,25 @@ public class GuiDriver {
     /** Sets the zoom before the centre, because changing the downsample afterwards moves the centre. */
     public void view(double x, double y, double downsample, Integer z, Integer t) throws Exception {
         var action = "view %,.0f, %,.0f at %s×".formatted(x, y, downsample);
-        indicator.before(action);
+        if (Indicator.paced()) {
+            // A jump to another place and zoom reads as a cut on a recording, so paced mode moves there over the delay:
+            // the centre in a straight line, the zoom at a steady rate.
+            indicator.announce(action);
+            var start = fx(() -> new double[] {qupath.getViewer().getCenterPixelX(), qupath.getViewer().getCenterPixelY(),
+                    qupath.getViewer().getDownsampleFactor()});
+            int steps = Math.max(1, Indicator.delayMs.get() / 40);
+            for (int i = 1; i < steps; i++) {
+                double f = i / (double) steps, s = f * f * (3 - 2 * f);
+                double cx = start[0] + (x - start[0]) * s, cy = start[1] + (y - start[1]) * s;
+                double d = start[2] * Math.pow(downsample / start[2], s);
+                fx(() -> {
+                    qupath.getViewer().setDownsampleFactor(d);
+                    qupath.getViewer().setCenterPixelLocation(cx, cy);
+                    return null;
+                });
+                Thread.sleep(40);
+            }
+        }
         fx(() -> {
             var viewer = qupath.getViewer();
             viewer.setDownsampleFactor(downsample);
@@ -730,7 +748,7 @@ public class GuiDriver {
             return;
         } else if (node instanceof TableView<?> t) {
             sb.append("  ".repeat(depth)).append("%sTableView columns=%s".formatted(tag(t, page),
-                    t.getColumns().stream().map(c -> c.getText()).toList())).append('\n');
+                    t.getColumns().stream().map(c -> c.getText() + sortMark(t, c)).toList())).append('\n');
             rows(sb, depth, page, t.getItems().size(), row ->
                     t.getColumns().stream().map(c -> cellText(c.getCellData(row))).collect(Collectors.joining(" | ")));
             return;
@@ -753,6 +771,13 @@ public class GuiDriver {
         if (recurse && node instanceof Parent p)
             for (Node child : p.getChildrenUnmodifiable())
                 describe(child, depth, sb, page);
+    }
+
+    /** " ↑" or " ↓" after a column the table is sorted by, so an agent can see that clicking its header took effect. */
+    private static String sortMark(TableView<?> t, javafx.scene.control.TableColumn<?, ?> c) {
+        if (!t.getSortOrder().contains(c))
+            return "";
+        return c.getSortType() == javafx.scene.control.TableColumn.SortType.ASCENDING ? " ↑" : " ↓";
     }
 
     private static Object first(List<?> items) {

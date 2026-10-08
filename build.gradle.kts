@@ -6,7 +6,7 @@ plugins {
 qupathExtension {
     name = "qupath-gui-driver"
     group = "io.earthmover.qupath"
-    version = "0.1.3"
+    version = "0.1.4"
     description = "Serves MCP from inside QuPath so an AI agent can drive the GUI"
     automaticModule = "io.earthmover.qupath.driver"
 }
