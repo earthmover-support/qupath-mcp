@@ -9,6 +9,13 @@
             "homepage": "https://github.com/earthmover-support/qupath-mcp",
             "releases": [
                 {
+                    "name": "v0.1.2",
+                    "main_url": "https://github.com/earthmover-support/qupath-mcp/releases/download/v0.1.2/qupath-gui-driver-0.1.2-all.jar",
+                    "version_range": {
+                        "min": "v0.7.0"
+                    }
+                },
+                {
                     "name": "v0.1.1",
                     "main_url": "https://github.com/earthmover-support/qupath-mcp/releases/download/v0.1.1/qupath-gui-driver-0.1.1-all.jar",
                     "version_range": {
