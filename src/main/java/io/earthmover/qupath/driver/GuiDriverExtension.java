@@ -8,6 +8,9 @@ import org.slf4j.LoggerFactory;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.IntegerProperty;
 import javafx.scene.control.CheckMenuItem;
+import javafx.scene.control.Menu;
+import javafx.scene.control.RadioMenuItem;
+import javafx.scene.control.ToggleGroup;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.extensions.QuPathExtension;
 import qupath.lib.gui.prefs.PathPrefs;
@@ -31,9 +34,26 @@ public class GuiDriverExtension implements QuPathExtension {
     public void installExtension(QuPathGUI qupath) {
         var item = new CheckMenuItem("MCP server");
         item.selectedProperty().bindBidirectional(enabled);
-        qupath.getMenu("Extensions", true).getItems().add(item);
+        var show = new Menu("Show agent actions");
+        var modes = new ToggleGroup();
+        for (var m : Indicator.Mode.values()) {
+            var radio = new RadioMenuItem(switch (m) {
+                case OFF -> "Off";
+                case MARK -> "Mark";
+                case PACED -> "Paced";
+            });
+            radio.setToggleGroup(modes);
+            radio.setSelected(Indicator.mode.get() == m);
+            radio.setOnAction(e -> Indicator.mode.set(m));
+            Indicator.mode.addListener((obs, was, now) -> radio.setSelected(now == m));
+            show.getItems().add(radio);
+        }
+        qupath.getMenu("Extensions", true).getItems().addAll(item, show);
         qupath.getPreferencePane().addPropertyPreference(port, Integer.class, "MCP server port", "MCP server",
                 "Port for the MCP server on 127.0.0.1; takes effect when the server next starts.");
+        qupath.getPreferencePane().addPropertyPreference(Indicator.delayMs, Integer.class, "Paced delay (ms)", "MCP server",
+                "In the Paced setting of Extensions > Show agent actions, how long the pointer takes to reach each "
+                        + "control before the agent acts on it.");
 
         String script = System.getProperty("qupath.driver.script");
         var thread = new Thread(() -> run(qupath, script), "qupath-gui-driver");

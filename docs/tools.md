@@ -19,7 +19,22 @@ Tools that act on the GUI (`qupath_menu`, `qupath_click`, `qupath_select`, `qupa
 | `qupath_view(x, y, downsample, z=None, t=None)` | move the viewer to a pixel, zoom, plane `z` and timepoint `t` | `ok` |
 | `qupath_windows()` | find the window title to pass as `window` | One line per window: `title — WxH (focused)` |
 | `qupath_screenshot(window=None, index=0, max_size=1024, format="png", quality=0.85, viewer=False, region=None)` | see what a window shows | The window as an image, plus a text item with its size |
+| `qupath_show_actions(mode=None, delay_ms=None)` | change what the person watching sees: `off`, `mark` or `paced`, and the delay before each paced action | `mode: mark, delay_ms: 1000` |
 | `qupath_quit()` | end a session | `quit requested` |
+
+## Watching the agent
+
+QuPath shows the person at the screen what the agent does, in one of three modes:
+
+| Mode | What it shows | Effect on the agent |
+|---|---|---|
+| **Mark** (default) | A ring on each control the agent clicks, types into, selects or sets; a crosshair where the viewer moves to; a keycap for key presses. A panel in the window's lower right lists the last six actions, including menu items, opened images and Groovy runs, and fades after 4 s without activity. A badge names the client, as *Claude Code is driving*, while a tool call runs. | None. The marks are drawn after the action is dispatched. |
+| **Paced** | The same, and before each action a pointer moves to the control, or the menu path, key or viewer position shows at the top of the window. | Waits the paced delay (default 1000 ms) before each action. |
+| **Off** | Nothing. | None. |
+
+Paced suits screen recordings and anyone following along. The person sets the mode under **Extensions ▸ Show agent actions** and the delay with the *Paced delay (ms)* preference; the agent sets both with `qupath_show_actions`. Both persist across restarts.
+
+The marks are drawn only in QuPath's windows: a menu in the macOS menu bar can't be opened from code, so paced mode shows its path instead. `qupath_screenshot`, `qupath_describe` and click lookups leave the marks out, so the agent sees QuPath as it is.
 
 ## Notes
 

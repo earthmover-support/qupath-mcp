@@ -27,6 +27,7 @@ The jar is the `qupath-gui-driver` extension. The server speaks MCP over HTTP on
 
 - `qupath_describe` returns a dialog's buttons, text fields, tables and labels as text, so the agent can read a dialog without a screenshot.
 - Tools that act on the GUI, such as `qupath_menu` and `qupath_click`, return without waiting for the handler. A handler that opens a modal dialog would otherwise block the call until the dialog closes or the 60 s timeout expires.
+- QuPath marks each control the agent acts on and lists its recent actions in the corner of the window, so the person at the screen can follow along. A paced mode slows the agent down for recordings; see [Watching the agent](tools.md#watching-the-agent).
 
 ## Example session
 

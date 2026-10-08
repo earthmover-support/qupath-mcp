@@ -72,10 +72,12 @@ public class GuiDriver {
 
     private final QuPathGUI qupath;
     private final File outDir;
+    final Indicator indicator;
 
     GuiDriver(QuPathGUI qupath, String outDir) {
         this.qupath = qupath;
         this.outDir = new File(outDir);
+        this.indicator = new Indicator(qupath);
     }
 
     /** Evaluates Groovy source (a File or String) with the helpers bound; {@code println} goes to {@code out} if given. */
@@ -116,7 +118,7 @@ public class GuiDriver {
                 var b = qupath.getViewer().getView().localToScene(qupath.getViewer().getView().getBoundsInLocal());
                 crop = new double[] {b.getMinX(), b.getMinY(), b.getWidth(), b.getHeight()};
             }
-            return new Capture(scene.snapshot(null), crop, scene.getWidth());
+            return new Capture(Indicator.without(scene, () -> scene.snapshot(null)), crop, scene.getWidth());
         });
         if (capture == null)
             return null;
@@ -472,6 +474,9 @@ public class GuiDriver {
      */
     public void click(Node node, boolean right, boolean doubleClick) {
         logger.info("click {} right={} double={}", node, right, doubleClick);
+        var action = (right ? "right-click" : doubleClick ? "double-click" : "click")
+                + (node instanceof Labeled l ? " “" + name(l) + "”" : "");
+        indicator.before(node, action);
         Platform.runLater(() -> {
             if (node instanceof ButtonBase b && !right && !doubleClick) {
                 b.fire();
@@ -492,6 +497,7 @@ public class GuiDriver {
                             count, false, false, false, false, type == MouseEvent.MOUSE_PRESSED, false, false, true,
                             false, true, null));
         });
+        indicator.mark(node, action);
     }
 
     /** Finds a menu item by a path such as {@code Help>About}. */
@@ -519,6 +525,12 @@ public class GuiDriver {
      */
     public void fire(MenuItem item) {
         logger.info("fire {}", item.getText());
+        var path = new ArrayList<String>();
+        for (MenuItem m = item; m != null; m = m.getParentMenu())
+            path.add(0, m.getText());
+        var action = String.join(" ▸ ", path);
+        indicator.before(action);
+        indicator.note(action);
         Platform.runLater(() -> {
             if (item instanceof CheckMenuItem c)
                 c.setSelected(!c.isSelected());
@@ -530,14 +542,20 @@ public class GuiDriver {
 
     /** Sets the text of the {@code field}-th text field and returns the text it then holds. */
     public String typeInto(Window window, String text, int field) throws Exception {
-        var result = fx(() -> {
+        var target = fx(() -> {
             var fields = new ArrayList<TextInputControl>();
             findAll(window.getScene().getRoot(), TextInputControl.class, fields);
             if (field >= fields.size())
                 throw new IllegalStateException("No text field #" + field + " in window (found " + fields.size() + ")");
-            fields.get(field).setText(text);
-            return fields.get(field).getText();
+            return fields.get(field);
         });
+        var action = "type “" + text + "”";
+        indicator.before(target, action);
+        var result = fx(() -> {
+            target.setText(text);
+            return target.getText();
+        });
+        indicator.mark(target, action);
         logger.info("typed '{}' into field {}", text, field);
         return result;
     }
@@ -562,6 +580,8 @@ public class GuiDriver {
 
     /** Sets the zoom before the centre, because changing the downsample afterwards moves the centre. */
     public void view(double x, double y, double downsample, Integer z, Integer t) throws Exception {
+        var action = "view %,.0f, %,.0f at %s×".formatted(x, y, downsample);
+        indicator.before(action);
         fx(() -> {
             var viewer = qupath.getViewer();
             viewer.setDownsampleFactor(downsample);
@@ -572,6 +592,7 @@ public class GuiDriver {
                 viewer.setTPosition(t);
             return null;
         });
+        indicator.viewer(action);
     }
 
     /** Text outline of the window's controls, one per line, indented by nesting of the controls shown. */
@@ -607,6 +628,8 @@ public class GuiDriver {
     }
 
     private static Labeled find(Node node, String text) {
+        if (!node.isVisible() || Indicator.isOverlay(node))
+            return null;
         if (node instanceof Labeled l && text.equals(l.getText()))
             return l;
         if (node instanceof Parent p)
@@ -618,7 +641,10 @@ public class GuiDriver {
         return null;
     }
 
+    /** Visible nodes only, as {@code describe} lists them, so a hidden control can't be matched or shift field numbers. */
     private static <T extends Node> void findAll(Node node, Class<T> type, List<T> into) {
+        if (!node.isVisible() || Indicator.isOverlay(node))
+            return;
         if (type.isInstance(node))
             into.add(type.cast(node));
         if (node instanceof Parent p)
@@ -643,7 +669,7 @@ public class GuiDriver {
     }
 
     private static void describe(Node node, int depth, StringBuilder sb, Page page) {
-        if (!node.isVisible())
+        if (!node.isVisible() || Indicator.isOverlay(node))
             return;
         String line = null;
         boolean recurse = false;
@@ -707,7 +733,21 @@ public class GuiDriver {
     }
 
     /** A GUI change worked out on the FX thread and applied later, so a handler that opens a modal dialog cannot block the caller. */
-    private record Change(Runnable apply, String message) {}
+    /** {@code action} is the short form shown to the person watching; {@code message} is the reply to the agent. */
+    private record Change(Runnable apply, String message, String action, Node target) {
+        Change at(Node node) {
+            return new Change(apply, message, action, target == null ? node : target);
+        }
+    }
+
+    /** Dispatches a change worked out by {@link #select} or {@link #set}, marking its target for the person watching. */
+    private String apply(Change change) {
+        logger.info("{}", change.message());
+        indicator.before(change.target(), change.action());
+        Platform.runLater(change.apply());
+        indicator.mark(change.target(), change.action());
+        return change.message();
+    }
 
     /** The controls of the window that carry a {@code #n} tag in {@code describe}, narrowed by a {@code #n} index or label text. */
     private List<Node> controls(Window window, String control) {
@@ -753,7 +793,8 @@ public class GuiDriver {
     private static <T> Change choose(String text, String shown, List<T> items, Function<T, String> name,
             java.util.function.Consumer<T> select) {
         var item = pick(items, text, name);
-        return item == null ? null : new Change(() -> select.accept(item), "selected \"%s\" in %s".formatted(name.apply(item), shown));
+        return item == null ? null : new Change(() -> select.accept(item), "selected \"%s\" in %s".formatted(name.apply(item), shown),
+                "select “%s”".formatted(name.apply(item)), null);
     }
 
     private static <T> Change selectIn(ComboBox<T> c, String text) {
@@ -786,9 +827,16 @@ public class GuiDriver {
         });
     }
 
+    /** Targets the tab's header, so the mark lands on what a person would click rather than the whole pane. */
     private static Change selectIn(TabPane tp, String text) {
-        return choose(text, "TabPane", tp.getTabs(), t -> Objects.toString(t.getText(), ""),
+        var change = choose(text, "TabPane", tp.getTabs(), t -> Objects.toString(t.getText(), ""),
                 t -> tp.getSelectionModel().select(t));
+        if (change == null)
+            return null;
+        var header = tp.lookupAll(".tab").stream()
+                .filter(n -> n.lookup(".tab-label") instanceof Labeled l && change.message().contains("\"" + l.getText() + "\""))
+                .findFirst().orElse(null);
+        return change.at(header);
     }
 
     /** Rows with a cell whose text equals {@code text} (else contains it); with {@code check}, ticks the row's checkbox cell. */
@@ -809,7 +857,7 @@ public class GuiDriver {
             return new Change(() -> {
                 t.getSelectionModel().select(matched.get(0));
                 t.scrollTo(matched.get(0));
-            }, "selected row %d of TableView".formatted(matched.get(0)));
+            }, "selected row %d of TableView".formatted(matched.get(0)), "select “%s”".formatted(text), null);
         var boxes = new ArrayList<WritableValue<Object>>();
         for (int row : matched)
             for (var column : t.getColumns())
@@ -822,7 +870,8 @@ public class GuiDriver {
             throw new IllegalStateException("The TableView has no checkbox column on %d of the %d matching rows".formatted(
                     matched.size() - boxes.size(), matched.size()));
         return new Change(() -> boxes.forEach(b -> b.setValue(check)),
-                "%s %d rows of TableView".formatted(check ? "checked" : "unchecked", boxes.size()));
+                "%s %d rows of TableView".formatted(check ? "checked" : "unchecked", boxes.size()),
+                "%s “%s”".formatted(check ? "tick" : "untick", text), null);
     }
 
     /**
@@ -837,14 +886,12 @@ public class GuiDriver {
                         : node instanceof ListView<?> n ? selectIn(n, text) : node instanceof TreeView<?> n ? selectIn(n, text)
                         : node instanceof TabPane n ? selectIn(n, text) : node instanceof TableView<?> n ? selectIn(n, text, check) : null;
                 if (c != null)
-                    return c;
+                    return c.at(node);
             }
             throw new IllegalStateException("No item '%s' in %s; qupath_describe lists the controls and their rows".formatted(
                     text, control == null ? "any combo box, list, tree, tab pane or table" : "control " + control));
         });
-        logger.info("select {}", change.message());
-        Platform.runLater(change.apply());
-        return change.message();
+        return apply(change);
     }
 
     /** Sets a spinner, slider, checkbox or text field picked by {@code control} (a {@code #n} from describe, or its label's text). */
@@ -871,11 +918,11 @@ public class GuiDriver {
                 throw new IllegalStateException("%s cannot be set; use qupath_select for lists, tabs and combo boxes".formatted(
                         node.getClass().getSimpleName()));
             }
-            return new Change(apply, "set %s %s to %s".formatted(node.getClass().getSimpleName(), label(node), value));
+            var named = label(node).isBlank() ? "" : " “" + label(node) + "”";
+            return new Change(apply, "set %s %s to %s".formatted(node.getClass().getSimpleName(), label(node), value),
+                    "set%s to %s".formatted(named, value), node);
         });
-        logger.info("{}", change.message());
-        Platform.runLater(change.apply());
-        return change.message();
+        return apply(change);
     }
 
     /**
@@ -899,7 +946,9 @@ public class GuiDriver {
         }
         var target = fx(() -> window.getScene().getFocusOwner() != null ? window.getScene().getFocusOwner() : window.getScene().getRoot());
         logger.info("keys '{}' -> {}", keys, target);
+        indicator.before("key " + keys);
         Platform.runLater(() -> events.forEach(e -> Event.fireEvent(target, e)));
+        indicator.keys(window, keys);
         return "sent %s to %s".formatted(keys, target.getClass().getSimpleName());
     }
 
@@ -909,16 +958,16 @@ public class GuiDriver {
      */
     public String open(String pathOrUri) throws Exception {
         logger.info("open {}", pathOrUri);
+        indicator.note("open " + pathOrUri.replaceFirst(".*[/\\\\]", ""));
         var result = new CompletableFuture<Boolean>();
-        var thread = new Thread(() -> {
+        // openImage must run on the FX thread; a prompt it shows nests an event loop there, so the wait below still times out.
+        Platform.runLater(() -> {
             try {
                 result.complete(qupath.openImage(qupath.getViewer(), pathOrUri, false, false));
             } catch (Throwable t) {
                 result.completeExceptionally(t);
             }
-        }, "qupath-gui-driver-open");
-        thread.setDaemon(true);
-        thread.start();
+        });
         try {
             return result.get(5, TimeUnit.SECONDS) ? "opened " + pathOrUri : "QuPath did not open " + pathOrUri;
         } catch (TimeoutException e) {

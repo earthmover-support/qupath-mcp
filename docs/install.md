@@ -15,10 +15,14 @@ Install it from QuPath's extension manager, which also offers updates when a new
 3. In the extension manager, find **QuPath MCP** and click its install button (the tooltip says *Install extension*),
    then **Install**.
 
+Restart QuPath after installing or updating. An update replaces the jar on disk, but QuPath keeps running the version it started with until it restarts.
+
 To build it yourself instead, run `./gradlew shadowJar` in a clone of the repository and drag
 `build/libs/qupath-gui-driver-<version>-all.jar` onto QuPath.
 
 The MCP server starts with QuPath and logs `MCP server on http://127.0.0.1:51515/mcp`. Untick **Extensions ▸ MCP server** to stop it; the choice persists across restarts. The port is the *MCP server port* preference (default 51515) and applies the next time the server starts.
+
+**Extensions ▸ Show agent actions** sets what QuPath shows you while the agent works: **Mark** (the default), **Paced** or **Off**. See [Watching the agent](tools.md#watching-the-agent).
 
 ## Register the server
 

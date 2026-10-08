@@ -50,6 +50,7 @@ class Mcp {
                         view(x, y, downsample[, z, t]), quit(). println is captured.""",
                         """
                         {"code":{"description":"Groovy source; `qupath` is the QuPathGUI, wrap GUI access in fx { }","type":"string"},"timeout_s":{"description":"Seconds before the call gives up","type":"number","default":60}}""", "code", a -> {
+                            driver.indicator.note("running script…");
                             var r = server.evaluate(str(a, "code"), num(a, "timeout_s", 60));
                             var output = r.output().isEmpty() ? "" : "output:\n" + r.output() + "\n";
                             if (!r.ok())
@@ -210,6 +211,26 @@ Both results end with "Opened while waiting:" and the outline of any window that
                             return List.of(new ImageContent(null, Base64.getEncoder().encodeToString(shot.bytes()), shot.mime()),
                                     new TextContent("%dx%d %s".formatted(shot.width(), shot.height(), shot.mime().substring(6))));
                         }),
+                tool("qupath_show_actions", """
+                        Set how QuPath shows the person watching what you do, and return the setting.
+
+                        "mark" (default) rings each control you act on and lists recent actions in the window's corner, \
+                        without slowing you down. "paced" also glides a pointer to each target and waits `delay_ms` before \
+                        acting, for recordings or when the person wants to follow along. "off" shows nothing. The person can \
+                        change it under Extensions > Show agent actions; it persists.""",
+                        """
+                        {"mode":{"description":"off, mark or paced; omit to keep","type":"string","enum":["off","mark","paced"]},"delay_ms":{"description":"Pause before each action in paced mode, in milliseconds; omit to keep","type":"integer","minimum":0,"maximum":5000}}""",
+                        null, a -> {
+                            driver.fx(() -> {
+                                if (a.get("mode") instanceof String m)
+                                    Indicator.mode.set(Indicator.Mode.valueOf(m.toUpperCase()));
+                                if (a.get("delay_ms") instanceof Number d)
+                                    Indicator.delayMs.set(Math.max(0, Math.min(5000, d.intValue())));
+                                return null;
+                            });
+                            return text("mode: %s, delay_ms: %d".formatted(Indicator.mode.get().name().toLowerCase(),
+                                    Indicator.delayMs.get()));
+                        }),
                 tool("qupath_quit", "Quit QuPath.", "{}", null, a -> {
                     // Exiting at once would drop the connection before the reply is written.
                     var t = new Thread(() -> {
@@ -249,7 +270,7 @@ Both results end with "Opened while waiting:" and the outline of any window that
                 .instructions(INSTRUCTIONS).tools(tools).build();
     }
 
-    private static SyncToolSpecification tool(String name, String description, String properties, String required, Handler handler) {
+    private SyncToolSpecification tool(String name, String description, String properties, String required, Handler handler) {
         var schema = """
                 {"type":"object","properties":%s,"required":[%s]}""".formatted(properties,
                 required == null ? "" : Stream.of(required.split(",")).map(r -> "\"" + r + "\"").collect(Collectors.joining(",")));
@@ -257,6 +278,8 @@ Both results end with "Opened while waiting:" and the outline of any window that
                 .tool(McpSchema.Tool.builder().name(name).description(description)
                         .inputSchema(McpJsonDefaults.getMapper(), schema).build())
                 .callHandler((exchange, request) -> {
+                    var client = exchange.getClientInfo();
+                    driver.indicator.busy(true, client == null ? null : client.title() != null ? client.title() : client.name());
                     try {
                         // Clients that load tool schemas lazily may call without arguments; say what's needed.
                         if (required != null)
@@ -268,6 +291,8 @@ Both results end with "Opened while waiting:" and the outline of any window that
                         var cause = t instanceof ExecutionException && t.getCause() != null ? t.getCause() : t;
                         return CallToolResult.builder().addTextContent(
                                 cause.getMessage() != null ? cause.getMessage() : cause.toString()).isError(true).build();
+                    } finally {
+                        driver.indicator.busy(false, null);
                     }
                 }).build();
     }
