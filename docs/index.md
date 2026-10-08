@@ -20,7 +20,7 @@ Details, including building from source, are in [Install](install.md).
 
 QuPath's own scripting reaches the data model: images, objects, measurements. An agent also needs the GUI: open menus, read and answer dialogs, see the screen. These tools do that without deadlocking on modal dialogs, which block the window behind them until closed.
 
-The jar is the `qupath-gui-driver` extension. The server speaks MCP over HTTP on 127.0.0.1 and also exposes a plain HTTP endpoint that runs Groovy (QuPath's scripting language) against the GUI, for [scripts that are not MCP clients](without-mcp.md).
+The jar is the `qupath-gui-driver` extension. The server speaks MCP over HTTP on 127.0.0.1.
 
 ## What the tools handle for you
 
@@ -42,7 +42,5 @@ To open an image without a dialog, `qupath_open` does it in one call. A failing 
 ## Where to go next
 
 - [Tools](tools.md): every tool and when to use it.
-- [Use without MCP](without-mcp.md): the HTTP endpoints, script mode and the Groovy bindings, for test scripts.
-- [Traps](traps.md): modal dialogs, the JavaFX thread and zoom order.
 - [Security](security.md): what the server exposes.
 - [Contributing](contributing.md): building, releasing and source layout.

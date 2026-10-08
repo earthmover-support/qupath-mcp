@@ -49,7 +49,7 @@ class Mcp {
                         does not block), findMenuItem("Help>License"), typeInto(window, text[, fieldIndex]), describe(window), \
                         view(x, y, downsample[, z, t]), quit(). println is captured.""",
                         """
-                        {"code":{"type":"string"},"timeout_s":{"type":"number","default":60}}""", "code", a -> {
+                        {"code":{"description":"Groovy source; `qupath` is the QuPathGUI, wrap GUI access in fx { }","type":"string"},"timeout_s":{"description":"Seconds before the call gives up","type":"number","default":60}}""", "code", a -> {
                             var r = server.evaluate(str(a, "code"), num(a, "timeout_s", 60));
                             var output = r.output().isEmpty() ? "" : "output:\n" + r.output() + "\n";
                             if (!r.ok())
@@ -65,7 +65,7 @@ class Mcp {
                         native dialogs the tools cannot see: if the UI stops responding, that is reported. \
                         Use qupath_click / qupath_type to drive the dialog.""",
                         """
-                        {"path":{"type":"string"}}""", "path",
+                        {"path":{"description":"Menu path with > between levels, e.g. File>Open URI...","type":"string"}}""", "path",
                         a -> text(driver.act(() -> {
                             driver.fire(driver.findMenuItem(str(a, "path")));
                             return null;
@@ -80,8 +80,8 @@ class Mcp {
                         description of each window the click opened (so an error popup's text is returned directly), or \
                         "No new window opened." Prefer this over qupath_run_groovy for dialogs.""",
                         """
-                        {"text":{"type":"string"},"window":{"type":"string"},\
-                        "button":{"type":"string","enum":["left","right"],"default":"left"},"double":{"type":"boolean","default":false}}""",
+                        {"text":{"description":"Exact text of the button, checkbox, label or menu item to click","type":"string"},"window":{"description":"Title substring of the target window; omit for the focused dialog (else the main window)","type":"string"},\
+                        "button":{"description":"left, or right to open a context menu","type":"string","enum":["left","right"],"default":"left"},"double":{"description":"Double-click","type":"boolean","default":false}}""",
                         "text",
                         a -> text(driver.act(() -> {
                             driver.click(driver.lookup(driver.window(str(a, "window")), str(a, "text")),
@@ -93,7 +93,7 @@ class Mcp {
 
                         Use qupath_describe to see which field is which. Returns the field's text after setting it.""",
                         """
-                        {"text":{"type":"string"},"window":{"type":"string"},"field":{"type":"integer","default":0}}""", "text", a -> {
+                        {"text":{"description":"Text to put in the field (replaces its content)","type":"string"},"window":{"description":"Title substring of the target window; omit for the focused dialog (else the main window)","type":"string"},"field":{"description":"Which text field, 0 = first in the window","type":"integer","default":0}}""", "text", a -> {
                             var window = driver.window(str(a, "window"));
                             int field = (int) num(a, "field", 0);
                             return text("typed into %s field %d: \"%s\"".formatted(GuiDriver.titleOf(window), field,
@@ -107,7 +107,7 @@ class Mcp {
                         With `check` true or false, a table's matching rows (all of them) get their checkbox ticked or cleared \
                         instead. Returns what was selected, the open windows and any window it opened.""",
                         """
-                        {"text":{"type":"string"},"window":{"type":"string"},"control":{"type":"string"},"check":{"type":"boolean"}}""",
+                        {"text":{"description":"Text of the item, tab or table row to select","type":"string"},"window":{"description":"Title substring of the target window; omit for the focused dialog (else the main window)","type":"string"},"control":{"description":"Which control: its #n from qupath_describe, an index, or the label next to it","type":"string"},"check":{"description":"For table rows with a checkbox column: true ticks, false clears every matching row","type":"boolean"}}""",
                         "text", a -> text(driver.act(() -> driver.select(driver.window(str(a, "window")), str(a, "text"),
                                 str(a, "control"), (Boolean) a.get("check"))))),
                 tool("qupath_set", """
@@ -116,7 +116,7 @@ class Mcp {
                         `control` is its `#n` from qupath_describe, or the text of its label. Returns what was set, the open \
                         windows and any window it opened.""",
                         """
-                        {"value":{"type":["string","number","boolean"]},"control":{"type":"string"},"window":{"type":"string"}}""",
+                        {"value":{"description":"New value: a number for spinners and sliders, true/false for checkboxes, text for fields","type":["string","number","boolean"]},"control":{"description":"Which control: its #n from qupath_describe, an index, or the label next to it","type":"string"},"window":{"description":"Title substring of the target window; omit for the focused dialog (else the main window)","type":"string"}}""",
                         "value,control", a -> text(driver.act(() -> driver.set(driver.window(str(a, "window")),
                                 valueText(a.get("value")), str(a, "control"))))),
                 tool("qupath_key", """
@@ -126,7 +126,7 @@ class Mcp {
                         Enter triggers a dialog's default button and Escape its cancel button. `window` defaults as in \
                         qupath_click. Returns what was sent, the open windows and any window it opened.""",
                         """
-                        {"keys":{"type":"string"},"window":{"type":"string"}}""", "keys",
+                        {"keys":{"description":"Space-separated key presses, e.g. Enter, Escape, Tab, Shortcut+S (Shortcut is Cmd on macOS)","type":"string"},"window":{"description":"Title substring of the target window; omit for the focused dialog (else the main window)","type":"string"}}""", "keys",
                         a -> text(driver.act(() -> driver.key(driver.window(str(a, "window")), str(a, "keys"))))),
                 tool("qupath_open", """
                         Open an image by file path or URI in the active viewer without any file chooser.
@@ -135,10 +135,10 @@ class Mcp {
                         open windows and any window it opened (for example a prompt about unsaved changes); follow with \
                         qupath_wait on the image path.""",
                         """
-                        {"path_or_uri":{"type":"string"}}""", "path_or_uri",
+                        {"path_or_uri":{"description":"Image file path or URI to open in the viewer","type":"string"}}""", "path_or_uri",
                         a -> text(driver.act(() -> driver.open(str(a, "path_or_uri"))))),
                 tool("qupath_describe", DESCRIBE, """
-                        {"window":{"type":"string"},"offset":{"type":"integer","default":0},"limit":{"type":"integer","default":20}}""",
+                        {"window":{"description":"Title substring; omit to describe every open window plus a main-window summary","type":"string"},"offset":{"description":"First row to list in tables, lists and trees","type":"integer","default":0},"limit":{"description":"Rows to list per table, list or tree","type":"integer","default":20}}""",
                         null, a -> text(describe(str(a, "window"), (int) num(a, "offset", 0), (int) num(a, "limit", 20)))),
                 tool("qupath_wait", """
                         Wait until `text` appears in (or, with gone=true, disappears from) the qupath_describe output; return that output.
@@ -146,8 +146,8 @@ class Mcp {
                         `window` is a title substring, as in qupath_describe. With no `window` it watches all open windows and the \
                         main-window summary, so it also detects an image switch by the image path. Fails on timeout with the last output.""",
                         """
-                        {"text":{"type":"string"},"window":{"type":"string"},"timeout_s":{"type":"number","default":30},\
-                        "gone":{"type":"boolean","default":false}}""", "text", a -> {
+                        {"text":{"description":"Text to wait for in the qupath_describe output","type":"string"},"window":{"description":"Title substring; omit to watch all windows and the main-window summary","type":"string"},"timeout_s":{"description":"Seconds to wait before failing","type":"number","default":30},\
+                        "gone":{"description":"Wait for the text to disappear instead","type":"boolean","default":false}}""", "text", a -> {
                             var text = str(a, "text");
                             double timeout = num(a, "timeout_s", 30);
                             boolean gone = Boolean.TRUE.equals(a.get("gone"));
@@ -168,8 +168,8 @@ class Mcp {
                         Use this instead of setting viewer properties by hand: it sets the zoom before the centre, which \
                         setDownsampleFactor would otherwise shift.""",
                         """
-                        {"x":{"type":"number"},"y":{"type":"number"},"downsample":{"type":"number"},\
-                        "z":{"type":"integer"},"t":{"type":"integer"}}""", "x,y,downsample", a -> {
+                        {"x":{"description":"Image x of the new centre, in full-resolution pixels","type":"number"},"y":{"description":"Image y of the new centre, in full-resolution pixels","type":"number"},"downsample":{"description":"Image pixels per screen pixel; 1 is full resolution","type":"number"},\
+                        "z":{"description":"z-slice, or omit to keep","type":"integer"},"t":{"description":"Timepoint, or omit to keep","type":"integer"}}""", "x,y,downsample", a -> {
                             driver.view(num(a, "x", 0), num(a, "y", 0), num(a, "downsample", 1),
                                     a.get("z") instanceof Number z ? z.intValue() : null, a.get("t") instanceof Number t ? t.intValue() : null);
                             return text("ok");
@@ -186,10 +186,10 @@ class Mcp {
                         among windows with the same title (0 = first), as numbered by qupath_describe. \
                         The macOS menu bar is not captured.""",
                         """
-                        {"window":{"type":"string"},"index":{"type":"integer","default":0},"max_size":{"type":"integer","default":1024},\
-                        "format":{"type":"string","enum":["png","jpeg"],"default":"png"},"quality":{"type":"number","default":0.85},\
-                        "viewer":{"type":"boolean","default":false},\
-                        "region":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4}}""", null, a -> {
+                        {"window":{"description":"Title substring; omit for the main window","type":"string"},"index":{"description":"Which match when several windows share the title","type":"integer","default":0},"max_size":{"description":"Longest side in pixels; larger images are downscaled, never cropped","type":"integer","default":1024},\
+                        "format":{"description":"png for dialogs, jpeg for slide or viewer content","type":"string","enum":["png","jpeg"],"default":"png"},"quality":{"description":"JPEG quality, 0 to 1","type":"number","default":0.85},\
+                        "viewer":{"description":"Capture only the image viewer","type":"boolean","default":false},\
+                        "region":{"description":"Crop to [x, y, width, height] in window coordinates","type":"array","items":{"type":"number"},"minItems":4,"maxItems":4}}""", null, a -> {
                             double[] region = a.get("region") instanceof List<?> r
                                     ? r.stream().mapToDouble(n -> ((Number) n).doubleValue()).toArray() : null;
                             var shot = driver.screenshot(str(a, "window"), (int) num(a, "index", 0), (int) num(a, "max_size", 1024),
@@ -249,6 +249,11 @@ class Mcp {
                         .inputSchema(McpJsonDefaults.getMapper(), schema).build())
                 .callHandler((exchange, request) -> {
                     try {
+                        // Clients that load tool schemas lazily may call without arguments; say what's needed.
+                        if (required != null)
+                            for (var r : required.split(","))
+                                if (request.arguments() == null || request.arguments().get(r) == null)
+                                    throw new IllegalArgumentException("%s needs `%s`; see its input schema.".formatted(name, r));
                         return CallToolResult.builder().content(handler.call(request.arguments())).isError(false).build();
                     } catch (Throwable t) {
                         var cause = t instanceof ExecutionException && t.getCause() != null ? t.getCause() : t;

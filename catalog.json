@@ -1,0 +1,19 @@
+{
+    "name": "QuPath MCP",
+    "description": "The QuPath MCP extension: lets an AI agent drive QuPath through an MCP server inside QuPath",
+    "extensions": [{
+        "name": "QuPath MCP",
+        "description": "Lets an AI agent drive QuPath's GUI through an MCP server inside QuPath",
+        "author": "Earthmover",
+        "homepage": "https://github.com/earthmover-support/qupath-mcp",
+        "releases": [
+            {
+                "name": "v0.1.0",
+                "main_url": "https://github.com/earthmover-support/qupath-mcp/releases/download/v0.1.0/qupath-gui-driver-0.1.0-all.jar",
+                "version_range": {
+                    "min": "v0.7.0"
+                }
+            }
+        ]
+    }]
+}

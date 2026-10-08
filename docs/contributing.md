@@ -37,6 +37,12 @@ Push a tag named `v<version>`, for example `v0.1.0`. The release workflow builds
 1. **Context efficiency.** Every result is read by the agent, so return text that is short and complete: one line per window, paged rows with a `rows X–Y of N` line, images capped in size. Add a limit or a format option before returning more.
 2. **Complete interaction.** Anything an agent needs in the GUI should be possible through a dedicated tool. `qupath_run_groovy` is the escape hatch, not the plan: when a task needs it repeatedly, add a small tool for it. Tools act through `fx` or `Platform.runLater` so a modal dialog never blocks them.
 
+## Test interfaces
+
+Besides `/mcp`, the server answers `POST /groovy` (run Groovy, returns `{ok, result, output, error}`), `GET /windows` and
+`GET /snapshot?window=<title>`, and `-Dqupath.driver.script=<file>` runs a Groovy file once the main window shows. Automated
+GUI tests and screenshot capture use these; agents should use the MCP tools.
+
 ## Implementation notes
 
 The MCP server uses the [MCP Java SDK](https://github.com/modelcontextprotocol/java-sdk) 1.1.2 (its Streamable HTTP servlet transport and Jackson 3 JSON mapper) on embedded Jetty 11, bound to 127.0.0.1. The SDK's security validator checks `Origin` and `Host` for every request, not only `/mcp`.

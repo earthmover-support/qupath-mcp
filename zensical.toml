@@ -8,8 +8,6 @@ nav = [
   { "Home" = "index.md" },
   { "Install" = "install.md" },
   { "Tools" = "tools.md" },
-  { "Use without MCP" = "without-mcp.md" },
-  { "Traps" = "traps.md" },
   { "Security" = "security.md" },
   { "Contributing" = "contributing.md" },
 ]
