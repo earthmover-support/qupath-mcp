@@ -14,3 +14,7 @@ gradle.properties
 # Python
 .venv/
 __pycache__/
+
+# Docs
+/site/
+.pixi/

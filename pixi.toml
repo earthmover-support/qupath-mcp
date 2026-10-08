@@ -1,0 +1,14 @@
+[workspace]
+name = "qupath-mcp"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64"]
+
+[feature.docs.dependencies]
+zensical = ">=0.0.67,<0.1"
+
+[feature.docs.tasks]
+docs = { cmd = "zensical serve" }
+docs-build = { cmd = "zensical build --clean" }
+
+[environments]
+docs = { features = ["docs"], solve-group = "default" }

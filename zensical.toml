@@ -1,0 +1,49 @@
+[project]
+site_name = "qupath-mcp"
+site_description = "Drive QuPath's GUI from an AI agent or a test script"
+site_url = "https://earthmover-support.github.io/qupath-mcp/"
+nav = [
+  { "Home" = "index.md" },
+  { "Install" = "install.md" },
+  { "Tools" = "tools.md" },
+  { "Use without MCP" = "without-mcp.md" },
+  { "Traps" = "traps.md" },
+  { "Security" = "security.md" },
+  { "Contributing" = "contributing.md" },
+]
+
+[project.theme]
+language = "en"
+features = [
+  "content.code.copy",
+  "navigation.footer",
+  "navigation.sections",
+  "navigation.top",
+  "search.highlight",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to system preference"
+
+[project.markdown_extensions]
+admonition = {}
+attr_list = {}
+toc.permalink = true
+pymdownx.details = {}
+pymdownx.highlight = {}
+pymdownx.inlinehilite = {}
+pymdownx.superfences = {}
