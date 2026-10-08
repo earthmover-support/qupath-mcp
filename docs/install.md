@@ -5,10 +5,6 @@ You need QuPath 0.7 and an MCP client such as Claude Code.
 !!! warning
     The MCP server lets the connected agent run any code in QuPath, as you, with access to your files. Give it only as much trust as you give your coding agent. It is on whenever the jar is installed. See [Security](security.md).
 
-## Platforms
-
-Tested on macOS arm64 with QuPath 0.7.0 only.
-
 ## Install the extension
 
 1. Download `qupath-gui-driver-<version>-all.jar` from the [releases page](https://github.com/earthmover-support/qupath-mcp/releases). To build it instead, run `./gradlew shadowJar` in a clone of the repository; the jar is in `build/libs/` and Gradle downloads the JDK it needs.
