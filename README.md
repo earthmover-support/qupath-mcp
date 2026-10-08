@@ -18,7 +18,8 @@ Tested on macOS arm64 with QuPath 0.7.0 only.
 
 **The MCP server lets the connected agent run any code in QuPath, as you, with access to your files.** Give it only as much trust as you give your coding agent. It is on whenever the jar is installed and any program on this computer can reach it (web pages cannot), so don't install it on a shared machine, and turn it off with Extensions ▸ MCP server when you're not using it. See [Security](https://earthmover-support.github.io/qupath-mcp/security/).
 
-Documentation: <https://earthmover-support.github.io/qupath-mcp/>
+Documentation, with a video of Claude Code opening a slide and counting cells in a tumour outline:
+<https://earthmover-support.github.io/qupath-mcp/>
 
 ## Licence
 

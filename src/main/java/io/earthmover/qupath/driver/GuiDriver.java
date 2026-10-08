@@ -63,6 +63,7 @@ import javafx.scene.input.MouseButton;
 import javafx.scene.input.MouseEvent;
 import javafx.stage.Stage;
 import javafx.stage.Window;
+import javafx.stage.WindowEvent;
 import qupath.lib.gui.QuPathGUI;
 
 /** Helpers exposed to driver scripts. All methods are meant to be called from a non-FX thread. */
@@ -576,6 +577,26 @@ public class GuiDriver {
         if (found == null)
             throw new IllegalStateException("No window with title containing '" + titleSubstring + "'");
         return found;
+    }
+
+    /**
+     * Closes a window as its close button would: a close request first, which a window that prompts (for example about
+     * unsaved changes) can consume, and then hides it if nothing did. Returns without waiting, like {@link #click}.
+     */
+    public String close(Window window) throws Exception {
+        if (window == qupath.getStage())
+            throw new IllegalArgumentException("Won't close QuPath's main window; use qupath_quit");
+        var title = titleOf(window);
+        logger.info("close {}", title);
+        indicator.before("close “" + title + "”");
+        indicator.note("close “" + title + "”");
+        Platform.runLater(() -> {
+            var request = new WindowEvent(window, WindowEvent.WINDOW_CLOSE_REQUEST);
+            window.fireEvent(request);
+            if (!request.isConsumed())
+                window.hide();
+        });
+        return "closed " + title;
     }
 
     /** Sets the zoom before the centre, because changing the downsample afterwards moves the centre. */

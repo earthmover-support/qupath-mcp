@@ -132,6 +132,12 @@ class Mcp {
                         """
                         {"keys":{"description":"Space-separated key presses, e.g. Enter, Escape, Tab, Shortcut+S (Shortcut is Cmd on macOS)","type":"string"},"window":{"description":"Title substring of the target window; omit for the focused dialog (else the main window)","type":"string"}}""", "keys",
                         a -> text(driver.act(() -> driver.key(driver.window(str(a, "window")), str(a, "keys"))))),
+                tool("qupath_close", """
+                        Close a window as its close button would. A window that asks first (for example about unsaved \
+                        changes) shows its prompt instead, which the result lists. Use qupath_quit to close QuPath itself.""",
+                        """
+                        {"window":{"description":"Title substring of the window to close; omit for the focused dialog","type":"string"}}""", null,
+                        a -> text(driver.act(() -> driver.close(driver.window(str(a, "window")))))),
                 tool("qupath_open", """
                         Open an image by file path or URI in the active viewer without any file chooser.
 

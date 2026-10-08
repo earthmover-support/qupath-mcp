@@ -2,7 +2,7 @@
 
 A failing tool returns an error result (`isError`) with the message. Groovy failures come back as the exception, its causes and the script lines they came from. `qupath_screenshot` fails when no window matches the title and index.
 
-Tools that act on the GUI (`qupath_menu`, `qupath_click`, `qupath_select`, `qupath_set`, `qupath_key`, `qupath_open`) return without waiting for the handler, so a modal dialog never blocks the call. They wait about a second, then return what they did, the open windows one per line (`title — WxH (focused)`), and the outline of each window the action opened, or `No new window opened.`, which tells the agent to check with `qupath_describe` or `qupath_wait`. Call that the *action result*.
+Tools that act on the GUI (`qupath_menu`, `qupath_click`, `qupath_select`, `qupath_set`, `qupath_key`, `qupath_close`, `qupath_open`) return without waiting for the handler, so a modal dialog never blocks the call. They wait about a second, then return what they did, the open windows one per line (`title — WxH (focused)`), and the outline of each window the action opened, or `No new window opened.`, which tells the agent to check with `qupath_describe` or `qupath_wait`. Call that the *action result*.
 
 | Tool | Use it to… | Returns |
 |---|---|---|
@@ -13,6 +13,7 @@ Tools that act on the GUI (`qupath_menu`, `qupath_click`, `qupath_select`, `qupa
 | `qupath_set(value, control, window=None)` | set a spinner, slider, checkbox (`true`/`false`) or text field | `set Spinner Size: to 7`, then the action result |
 | `qupath_type(text, window=None, field=0)` | fill in a text field; `field` is its 0-based index | `typed into <window> field 0: "<text>"` |
 | `qupath_key(keys, window=None)` | press keys, space-separated for several | `sent Enter to <node>`, then the action result |
+| `qupath_close(window=None)` | close a window, such as a measurement table, as its close button would; a window that prompts first shows its prompt | `closed <title>`, then the action result |
 | `qupath_open(path_or_uri)` | open an image without a file chooser | `opened <path>`, then the action result |
 | `qupath_describe(window=None, offset=0, limit=20)` | read a dialog or the viewer state as text | The controls of every window matching `window`, each headed by its index |
 | `qupath_wait(text, window=None, timeout_s=30, gone=False)` | wait for an image to load or a dialog to fill, instead of polling in Groovy | The `qupath_describe` output once `text` appears in it (with `gone=True`, disappears); on timeout an error with the last output |

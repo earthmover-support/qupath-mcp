@@ -17,6 +17,24 @@ Details, including building from source, are in [Install](install.md).
 !!! warning
     The MCP server lets the connected agent run any code in QuPath, as you, with access to your files. Give it only as much trust as you give your coding agent. It is on whenever the jar is installed and any program on this computer can reach it; turn it off with **Extensions ▸ MCP server**. See [Security](security.md).
 
+## See it work
+
+### Count the cells in a pathologist's tumour outline
+
+Claude Code, from an empty QuPath, given the prompt in the strip at the bottom. It opens a lymph-node slide, answers
+**Set image type**, imports the pathologists' tumour outlines that sit beside the slide, finds the largest in the
+annotation measurement table, runs **Cell detection** inside it with QuPath's defaults, and reports the count.
+[Paced mode](tools.md#watching-the-agent) shows each action as it happens.
+
+<video controls muted playsinline preload="metadata" poster="assets/tumor-091-cell-count.jpg" width="100%">
+  <source src="assets/tumor-091-cell-count.mp4" type="video/mp4">
+</video>
+
+QuPath has no importer for the outlines' ASAP XML format, so that one step runs a short Groovy script through
+`qupath_run_groovy`; everything else goes through the GUI tools. The slide is `tumor_091` from
+[CAMELYON16](https://camelyon16.grand-challenge.org/) (CC0). The video is recorded inside QuPath, so its dialogs are drawn
+where they opened on screen.
+
 ## Why
 
 QuPath's own scripting reaches the data model: images, objects, measurements. An agent also needs the GUI: open menus, read and answer dialogs, see the screen. These tools do that without deadlocking on modal dialogs, which block the window behind them until closed.
