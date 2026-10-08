@@ -4,7 +4,8 @@ Drive QuPath's GUI from an AI agent. A QuPath 0.7 extension runs an MCP server i
 
 ## Install
 
-1. Download `qupath-gui-driver-<version>-all.jar` from [Releases](https://github.com/earthmover-support/qupath-mcp/releases), drag it onto QuPath and restart QuPath.
+1. In QuPath, open **Extensions ▸ Manage extensions ▸ Manage extension catalogs**, add
+   `https://github.com/earthmover-support/qupath-mcp`, then install **QuPath MCP** from the extension manager.
 2. Register the server with your agent:
 
     --8<-- "register.md"

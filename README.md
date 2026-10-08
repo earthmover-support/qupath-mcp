@@ -4,9 +4,9 @@ Drive QuPath's GUI from an AI agent. QuPath's own scripting reaches the data mod
 
 ## Quick start
 
-1. Download `qupath-gui-driver-<version>-all.jar` from the [releases](https://github.com/earthmover-support/qupath-mcp/releases), or build it with `./gradlew shadowJar`.
-2. Drag the jar onto QuPath and restart QuPath.
-3. Register the server with your client. For Claude Code:
+1. In QuPath, open **Extensions ▸ Manage extensions ▸ Manage extension catalogs**, add
+   `https://github.com/earthmover-support/qupath-mcp`, then install **QuPath MCP** from the extension manager.
+2. Register the server with your client. For Claude Code:
 
 ```bash
 claude mcp add -s user --transport http qupath http://127.0.0.1:51515/mcp

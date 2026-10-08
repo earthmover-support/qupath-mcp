@@ -51,6 +51,7 @@ import javafx.scene.control.TabPane;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextInputControl;
 import javafx.scene.control.ToggleButton;
+import javafx.scene.control.Tooltip;
 import javafx.scene.control.TreeItem;
 import javafx.scene.control.TreeView;
 import javafx.scene.input.ContextMenuEvent;
@@ -213,20 +214,29 @@ public class GuiDriver {
      * returned one), the open windows, and the outline of each window the action opened.
      */
     String act(Callable<?> action) throws Exception {
-        var before = fx(() -> new ArrayList<>(Window.getWindows()));
+        var before = windowsNow();
         var message = action.call();
         Thread.sleep(1000);
         if (!responsive())
             return NATIVE_DIALOG;
-        var opened = fx(() -> {
+        var opened = openedSince(before);
+        return (message == null ? "" : message + "\n\n") + windowsText()
+                + "\n\n" + (opened.isEmpty() ? "No new window opened." : "Opened by the action:\n" + opened);
+    }
+
+    List<Window> windowsNow() throws Exception {
+        return fx(() -> new ArrayList<>(Window.getWindows()));
+    }
+
+    /** The outline of each window showing now that was not in {@code before}, or an empty string. */
+    String openedSince(List<Window> before) throws Exception {
+        return fx(() -> {
             var sb = new StringBuilder();
             for (Window w : Window.getWindows())
                 if (w.isShowing() && !before.contains(w))
                     sb.append(describe(w));
             return sb.toString();
         });
-        return (message == null ? "" : message + "\n\n") + windowsText()
-                + "\n\n" + (opened.isEmpty() ? "No new window opened." : "Opened by the action:\n" + opened);
     }
 
     /** One line per showing window: title, size and whether it has focus. */
@@ -347,20 +357,108 @@ public class GuiDriver {
         throw new TimeoutException("No window with title containing '" + titleSubstring + "'");
     }
 
-    /** Finds a {@link Labeled} node in the window whose text equals {@code text}. */
-    public Labeled lookup(Window window, String text) throws Exception {
-        var found = fx(() -> find(window.getScene().getRoot(), text));
+    /**
+     * Finds the node to click: a {@code #n} from describe, else the first labeled node whose text equals {@code text}, else
+     * the one whose tooltip (whole, then first line) or accessible text equals it. Several tooltip or accessible-text
+     * matches are an error that lists them, since icon-only buttons repeat one tooltip per row.
+     */
+    public Node lookup(Window window, String text) throws Exception {
+        var found = fx(() -> {
+            if (text.strip().matches("#\\d+")) {
+                var n = controls(window, text);
+                if (n.isEmpty())
+                    throw new IllegalStateException("No control " + text + "; qupath_describe shows each as #n");
+                return n.get(0);
+            }
+            var labeled = new ArrayList<Labeled>();
+            findAll(window.getScene().getRoot(), Labeled.class, labeled);
+            var tiers = List.<java.util.function.Predicate<Labeled>>of(l -> text.equals(l.getText()),
+                    l -> text.equals(tooltipText(l)), l -> text.equals(firstLine(tooltipText(l))),
+                    l -> text.equals(l.getAccessibleText()));
+            var all = new ArrayList<Node>();
+            describe(window.getScene().getRoot(), 0, new StringBuilder(), new Page(0, 0, all));
+            for (int i = 0; i < tiers.size(); i++) {
+                var tier = tiers.get(i);
+                boolean first = i == 0;
+                var matches = labeled.stream().filter(tier).filter(m -> first || all.contains(m)).toList();
+                if (matches.size() == 1 || i == 0 && !matches.isEmpty())
+                    return matches.get(0);
+                if (matches.size() > 1) {
+                    throw new IllegalStateException("%d controls match '%s'; click one by its #n from qupath_describe:\n%s".formatted(
+                            matches.size(), text, matches.stream().map(m -> "#%d [near \"%s\"]".formatted(all.indexOf(m), nearestLabel(m)))
+                                    .collect(Collectors.joining("\n"))));
+                }
+            }
+            return null;
+        });
         logger.info("lookup '{}' -> {}", text, found);
         if (found == null) {
             var buttons = fx(() -> {
                 var all = new ArrayList<ButtonBase>();
                 findAll(window.getScene().getRoot(), ButtonBase.class, all);
-                return all.stream().map(ButtonBase::getText).filter(t -> t != null && !t.isBlank()).limit(MAX_ROWS).toList();
+                return all.stream().map(GuiDriver::name).filter(t -> !t.isBlank()).distinct().limit(MAX_ROWS).toList();
             });
             throw new IllegalStateException("No button '%s' in '%s'. Buttons: %s".formatted(text, titleOf(window),
                     String.join(", ", buttons)));
         }
         return found;
+    }
+
+    private static String tooltipText(Node node) {
+        var tip = node instanceof Labeled l && l.getTooltip() != null ? l.getTooltip()
+                : node.getProperties().get("javafx.scene.control.Tooltip") instanceof Tooltip t ? t : null;
+        return tip == null || tip.getText() == null ? "" : tip.getText();
+    }
+
+    private static String firstLine(String s) {
+        return s.strip().lines().findFirst().orElse("");
+    }
+
+    /** What a control is called: its text, else its tooltip's first line in brackets, else its accessible text or graphic's id or style class. */
+    private static String name(Labeled l) {
+        if (l.getText() != null && !l.getText().isBlank())
+            return l.getText();
+        var tip = firstLine(tooltipText(l));
+        if (!tip.isEmpty())
+            return "[" + tip + "]";
+        if (l.getAccessibleText() != null && !l.getAccessibleText().isBlank())
+            return "[" + l.getAccessibleText() + "]";
+        var g = l.getGraphic();
+        if (g != null && g.getId() != null && !g.getId().isBlank())
+            return "[" + g.getId() + "]";
+        if (g != null && !g.getStyleClass().isEmpty())
+            return "[" + g.getStyleClass().get(g.getStyleClass().size() - 1) + "]";
+        return "(icon)";
+    }
+
+    /** The text of a table cell value; a node, such as a button, shows what it is called rather than its toString. */
+    private static String cellText(Object value) {
+        return value instanceof Labeled l ? name(l) : value instanceof Node ? "(icon)" : String.valueOf(value);
+    }
+
+    /** The nearest text before the node in document order: a plain label among the earlier siblings of it or of an ancestor. */
+    private static String nearestLabel(Node node) {
+        for (Node child = node, parent = node.getParent(); parent != null; child = parent, parent = parent.getParent()) {
+            var siblings = ((Parent) parent).getChildrenUnmodifiable();
+            for (int i = siblings.indexOf(child) - 1; i >= 0; i--) {
+                var text = firstText(siblings.get(i));
+                if (text != null)
+                    return text;
+            }
+        }
+        return "";
+    }
+
+    private static String firstText(Node node) {
+        if (node instanceof Labeled l && !(l instanceof ButtonBase) && l.getText() != null && !l.getText().isBlank())
+            return l.getText();
+        if (node instanceof Parent p && !(node instanceof ButtonBase))
+            for (Node child : p.getChildrenUnmodifiable()) {
+                var t = firstText(child);
+                if (t != null)
+                    return t;
+            }
+        return null;
     }
 
     /** Returns without waiting: a handler that opens a modal dialog would otherwise block until the dialog closes. */
@@ -550,11 +648,12 @@ public class GuiDriver {
         String line = null;
         boolean recurse = false;
         if (node instanceof ButtonBase b) {
-            line = "%s%s \"%s\"%s".formatted(b instanceof CheckBox ? tag(b, page) : "", b.getClass().getSimpleName(), b.getText(),
+            var shown = b.getText() != null && !b.getText().isBlank() ? "\"" + b.getText() + "\"" : name(b);
+            line = "%s%s %s%s".formatted(tag(b, page), b.getClass().getSimpleName(), shown,
                     (b instanceof ToggleButton t && t.isSelected() || b instanceof CheckBox c && c.isSelected() ? " [selected]" : "")
                             + (b.isDisabled() ? " [disabled]" : ""));
         } else if (node instanceof Labeled l) {
-            if (l.getText() != null && !l.getText().isBlank())
+            if (l.getText() != null && !l.getText().isBlank() && !"Glyph".equals(l.getClass().getSimpleName()))
                 line = "%s \"%s\"".formatted(l.getClass().getSimpleName(), l.getText());
             recurse = true;
         } else if (node instanceof TextInputControl t) {
@@ -580,7 +679,7 @@ public class GuiDriver {
             sb.append("  ".repeat(depth)).append("%sTableView columns=%s".formatted(tag(t, page),
                     t.getColumns().stream().map(c -> c.getText()).toList())).append('\n');
             rows(sb, depth, page, t.getItems().size(), row ->
-                    t.getColumns().stream().map(c -> String.valueOf(c.getCellData(row))).collect(Collectors.joining(" | ")));
+                    t.getColumns().stream().map(c -> cellText(c.getCellData(row))).collect(Collectors.joining(" | ")));
             return;
         } else if (node instanceof ListView<?> v) {
             sb.append("  ".repeat(depth)).append(tag(v, page)).append("ListView\n");
@@ -620,7 +719,7 @@ public class GuiDriver {
         var index = control.strip().replaceFirst("^#", "");
         if (index.matches("\\d+"))
             return Integer.parseInt(index) < all.size() ? List.of(all.get(Integer.parseInt(index))) : List.of();
-        return all.stream().filter(n -> label(n).contains(control)).toList();
+        return all.stream().filter(n -> (!(n instanceof ButtonBase) || n instanceof CheckBox) && label(n).contains(control)).toList();
     }
 
     /** The text of the label next to a control: its {@code labelFor} label, else the label just before it in its parent. */

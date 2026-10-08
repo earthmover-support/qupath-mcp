@@ -7,9 +7,16 @@ You need QuPath 0.7 and an MCP client such as Claude Code.
 
 ## Install the extension
 
-1. Download `qupath-gui-driver-<version>-all.jar` from the [releases page](https://github.com/earthmover-support/qupath-mcp/releases). To build it instead, run `./gradlew shadowJar` in a clone of the repository; the jar is in `build/libs/` and Gradle downloads the JDK it needs.
-2. Drag the jar onto QuPath, or copy it into the `extensions/` directory inside QuPath's user directory (Preferences ▸ QuPath user directory).
-3. Restart QuPath. **Extensions ▸ Manage extensions** lists what is installed.
+Install it from QuPath's extension manager, which also offers updates when a new version is released:
+
+1. In QuPath, choose **Extensions ▸ Manage extensions**, then **Manage extension catalogs**.
+2. Paste `https://github.com/earthmover-support/qupath-mcp` into **Catalog URL** and click **Add**. Close the catalog
+   window.
+3. In the extension manager, find **QuPath MCP** and click its install button (the tooltip says *Install extension*),
+   then **Install**.
+
+To build it yourself instead, run `./gradlew shadowJar` in a clone of the repository and drag
+`build/libs/qupath-gui-driver-<version>-all.jar` onto QuPath.
 
 The MCP server starts with QuPath and logs `MCP server on http://127.0.0.1:51515/mcp`. Untick **Extensions ▸ MCP server** to stop it; the choice persists across restarts. The port is the *MCP server port* preference (default 51515) and applies the next time the server starts.
 
@@ -37,4 +44,4 @@ curl localhost:51515/windows
 
 ## Uninstall
 
-Delete the jar from the `extensions/` directory, and remove the `qupath` entry from your client (`claude mcp remove -s user qupath` in Claude Code).
+In **Extensions ▸ Manage extensions**, remove **QuPath MCP** (its tooltip says *Remove extension*), and remove the `qupath` entry from your client (`claude mcp remove -s user qupath` in Claude Code).

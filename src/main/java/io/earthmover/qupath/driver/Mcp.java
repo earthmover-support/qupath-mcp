@@ -72,7 +72,10 @@ class Mcp {
                         }))),
                 tool("qupath_click", """
                         Click the button, checkbox or other labeled node (label, table or tree cell) whose text is exactly `text`, \
-                        without blocking (safe for buttons that open modal dialogs).
+                        without blocking (safe for buttons that open modal dialogs). If no text matches, the tooltip (whole, \
+                        then first line) or accessible text is tried, which is how an icon-only button is named; `text` may \
+                        also be the `#n` that qupath_describe shows for a control. When several controls match, the error \
+                        lists them with their #n and the nearest label before each; click one by its #n.
 
                         `window` is a title substring; default is an open context menu, else the focused or topmost non-main \
                         window, else the main window. `button` "right" opens the node's context menu and returns its items; \
@@ -80,7 +83,7 @@ class Mcp {
                         description of each window the click opened (so an error popup's text is returned directly), or \
                         "No new window opened." Prefer this over qupath_run_groovy for dialogs.""",
                         """
-                        {"text":{"description":"Exact text of the button, checkbox, label or menu item to click","type":"string"},"window":{"description":"Title substring of the target window; omit for the focused dialog (else the main window)","type":"string"},\
+                        {"text":{"description":"Exact text, tooltip text or #n (from qupath_describe) of the button, checkbox, label or menu item to click","type":"string"},"window":{"description":"Title substring of the target window; omit for the focused dialog (else the main window)","type":"string"},\
                         "button":{"description":"left, or right to open a context menu","type":"string","enum":["left","right"],"default":"left"},"double":{"description":"Double-click","type":"boolean","default":false}}""",
                         "text",
                         a -> text(driver.act(() -> {
@@ -144,7 +147,8 @@ class Mcp {
                         Wait until `text` appears in (or, with gone=true, disappears from) the qupath_describe output; return that output.
 
                         `window` is a title substring, as in qupath_describe. With no `window` it watches all open windows and the \
-                        main-window summary, so it also detects an image switch by the image path. Fails on timeout with the last output.""",
+                        main-window summary, so it also detects an image switch by the image path. Fails on timeout with the last output. \
+Both results end with "Opened while waiting:" and the outline of any window that opened meanwhile (for example a warning).""",
                         """
                         {"text":{"description":"Text to wait for in the qupath_describe output","type":"string"},"window":{"description":"Title substring; omit to watch all windows and the main-window summary","type":"string"},"timeout_s":{"description":"Seconds to wait before failing","type":"number","default":30},\
                         "gone":{"description":"Wait for the text to disappear instead","type":"boolean","default":false}}""", "text", a -> {
@@ -152,13 +156,18 @@ class Mcp {
                             double timeout = num(a, "timeout_s", 30);
                             boolean gone = Boolean.TRUE.equals(a.get("gone"));
                             long deadline = System.nanoTime() + (long) (timeout * 1e9);
+                            var before = driver.windowsNow();
                             while (true) {
                                 var out = driver.outline(str(a, "window"), 0, 20);
-                                if (out.contains(text) != gone)
-                                    return text(out);
-                                if (System.nanoTime() >= deadline)
+                                boolean done = out.contains(text) != gone;
+                                if (done || System.nanoTime() >= deadline) {
+                                    var opened = driver.openedSince(before);
+                                    out += opened.isEmpty() ? "" : "\n\nOpened while waiting:\n" + opened;
+                                    if (done)
+                                        return text(out);
                                     throw new Exception("Timed out after %ss waiting for '%s' to %s; last output:\n%s".formatted(
                                             timeout, text, gone ? "disappear" : "appear", out));
+                                }
                                 Thread.sleep(500);
                             }
                         }),
