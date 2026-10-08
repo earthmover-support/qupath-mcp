@@ -1,6 +1,6 @@
 # Use without MCP
 
-Using the MCP tools? See [Tools](tools.md). This page is for test scripts, CI and any client that is not an MCP client.
+Using an AI agent? See [Tools](tools.md). This page is for test scripts, CI and any client that is not an MCP client. The plain HTTP endpoints run on the same server as MCP, so they are on whenever **Extensions ▸ MCP server** is.
 
 ## Start QuPath
 
@@ -8,12 +8,12 @@ The extension reads these Java system properties. Pass them as `-D` options on t
 
 | Property | Meaning |
 |---|---|
-| `qupath.driver.port=<port>` | Starts the endpoint on 127.0.0.1 at this port. |
+| `qupath.driver.port=<port>` | Starts the server on 127.0.0.1 at this port even when **Extensions ▸ MCP server** is off. Overrides the port preference. |
 | `qupath.driver.script=<file>` | Runs this Groovy file once ([script mode](#script-mode)). |
 | `qupath.driver.exit=true` | Quits QuPath when the script ends, or fails. Needs `qupath.driver.script`. |
 | `qupath.driver.out=<dir>` | Directory for the PNGs that `snap` and `snapMain` write. Default `/tmp`. |
 
-The endpoint and the script start about 3 s after the main window shows. The port and script properties can be combined.
+The server and the script start about 3 s after the main window shows. The port and script properties can be combined.
 
 ```bash
 /Applications/QuPath-0.7.0-arm64.app/Contents/MacOS/QuPath-0.7.0-arm64 -Dqupath.driver.port=51515
@@ -21,7 +21,7 @@ The endpoint and the script start about 3 s after the main window shows. The por
 
 QuPath accepts `-q` (`--quiet`) to skip setup dialogs, update checks and messages.
 
-## HTTP endpoint
+## HTTP endpoints
 
 | Request | Returns |
 |---|---|
@@ -34,7 +34,7 @@ curl -X POST localhost:51515/groovy --data 'println qupath.getVersion(); 1+1'
 curl 'localhost:51515/snapshot?window=Licenses' -o window.png
 ```
 
-Requests that carry an `Origin` header or a foreign `Host` get a 403; see [Security](security.md).
+Requests with a foreign `Origin` or `Host` are rejected; see [Security](security.md). The MCP endpoint is `/mcp`.
 
 ## Script mode
 
@@ -50,9 +50,9 @@ Scripts and `/groovy` code have the same bindings:
 | `fx { ... }` | Runs a closure on the JavaFX thread and waits for it (60 s limit) |
 | `snap(name)`, `snapMain(name)` | Write PNGs of every open window, or of the main window, to the output directory |
 | `waitFor(titleSubstring, seconds)` | Waits for a window and returns it, or throws on timeout |
-| `window(titleSubstring)` | The matching window; `null` means the focused non-main one, else the most recently opened one, else the main one |
+| `window(titleSubstring)` | The matching window; `null` means an open context menu, else the focused non-main window, else the most recently opened one, else the main one |
 | `lookup(window, text)` | The labeled node whose text equals `text` |
-| `click(node)` | Fires a button; returns immediately. See [Traps](traps.md). |
+| `click(node)` | Fires a button, or sends mouse events to any other node; returns immediately. See [Traps](traps.md). |
 | `findMenuItem("Menu>Item")`, `fire(menuItem)` | Finds a menu item by path and fires it; `fire` returns immediately. See [Traps](traps.md). |
 | `typeInto(window, text[, fieldIndex])` | Sets a text field's text |
 | `describe(window)` | Text outline of the window's controls (tables, lists and trees show their first 20 rows) |

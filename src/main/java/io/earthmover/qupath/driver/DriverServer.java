@@ -1,29 +1,44 @@
 package io.earthmover.qupath.driver;
 
-import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.net.InetAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.net.URI;
-import java.net.URLDecoder;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
-import java.util.Map;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
+import org.eclipse.jetty.http.HttpStatus;
+import org.eclipse.jetty.server.Server;
+import org.eclipse.jetty.server.ServerConnector;
+import org.eclipse.jetty.server.handler.ErrorHandler;
+import org.eclipse.jetty.server.handler.StatisticsHandler;
+import org.eclipse.jetty.servlet.FilterHolder;
+import org.eclipse.jetty.servlet.ServletContextHandler;
+import org.eclipse.jetty.servlet.ServletHolder;
+import org.eclipse.jetty.util.thread.QueuedThreadPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.modelcontextprotocol.server.transport.DefaultServerTransportSecurityValidator;
+import io.modelcontextprotocol.server.transport.HttpServletStreamableServerTransportProvider;
+import io.modelcontextprotocol.server.transport.ServerTransportSecurityException;
+import jakarta.servlet.Filter;
+import jakarta.servlet.http.HttpServlet;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletResponseWrapper;
+
 /**
- * Loopback-only HTTP endpoint that evaluates Groovy and serves window screenshots. Runs arbitrary code, so it is opt-in.
- * QuPath's bundled runtime lacks jdk.httpserver, hence the minimal hand-rolled HTTP/1.1 handling.
+ * Loopback-only HTTP server: the MCP endpoint at {@code /mcp}, plus {@code /groovy}, {@code /windows} and
+ * {@code /snapshot} for scripts that are not MCP clients. Runs arbitrary code, so every request is checked against the
+ * loopback Origin and Host first.
  */
 class DriverServer {
 
@@ -31,103 +46,167 @@ class DriverServer {
 
     private final GuiDriver driver;
     private final int port;
+    private Server server;
 
     DriverServer(GuiDriver driver, int port) {
         this.driver = driver;
         this.port = port;
     }
 
-    private record Request(String method, String path, Map<String, String> query, String body) {}
+    record Evaluation(boolean ok, String result, String output, String error) {}
 
-    private record Response(int status, String type, byte[] body) {
-        Response(int status, String type, String body) {
-            this(status, type, body.getBytes(StandardCharsets.UTF_8));
+    void start() throws Exception {
+        // The SDK finds its JSON mapper with ServiceLoader on the context class loader, which is not the extension's.
+        var previous = Thread.currentThread().getContextClassLoader();
+        Thread.currentThread().setContextClassLoader(DriverServer.class.getClassLoader());
+        try {
+            listen();
+        } finally {
+            Thread.currentThread().setContextClassLoader(previous);
         }
     }
 
-    void start() throws IOException {
-        var server = new ServerSocket(port, 50, InetAddress.getLoopbackAddress());
-        var acceptor = new Thread(() -> {
-            while (true) {
-                try {
-                    var socket = server.accept();
-                    var t = new Thread(() -> serve(socket), "qupath-gui-driver-http");
-                    t.setDaemon(true);
-                    t.start();
-                } catch (IOException e) {
-                    logger.error("Accept failed", e);
-                    return;
-                }
-            }
-        }, "qupath-gui-driver-accept");
-        acceptor.setDaemon(true);
-        acceptor.start();
-        logger.info("Driver HTTP server listening on 127.0.0.1:{}", port);
-    }
-
-    private void serve(Socket socket) {
-        try (socket) {
-            var in = new BufferedInputStream(socket.getInputStream());
-            var requestLine = readLine(in).split(" ");
-            int length = 0;
-            boolean trusted = true;
-            for (String h; !(h = readLine(in)).isEmpty(); ) {
-                h = h.toLowerCase();
-                if (h.startsWith("content-length:"))
-                    length = Integer.parseInt(h.substring(15).trim());
-                // A page in the user's browser can POST to loopback (Origin set) or rebind its own hostname to
-                // 127.0.0.1 (Host wrong); neither is a local client such as curl or the MCP server.
-                else if (h.startsWith("origin:") || h.startsWith("host:") && !h.matches("host:\\s*(127\\.0\\.0\\.1|localhost)(:\\d+)?"))
-                    trusted = false;
-            }
-            var body = new String(in.readNBytes(length), StandardCharsets.UTF_8);
-            var uri = URI.create(requestLine[1]);
-            logger.info("{} {}", requestLine[0], requestLine[1]);
-
-            Response r;
+    private void listen() throws Exception {
+        // A page in the user's browser can POST to loopback (foreign Origin) or rebind its own hostname to 127.0.0.1
+        // (foreign Host); neither is a local client such as curl or an MCP client.
+        var security = DefaultServerTransportSecurityValidator.builder()
+                .allowedOrigins(List.of("http://127.0.0.1:" + port, "http://localhost:" + port))
+                .allowedHosts(List.of("127.0.0.1:" + port, "localhost:" + port))
+                .build();
+        Filter guard = (req, res, chain) -> {
+            var http = (HttpServletRequest) req;
+            var headers = Collections.list(http.getHeaderNames()).stream()
+                    .collect(Collectors.toMap(n -> n, n -> List.copyOf(Collections.list(http.getHeaders(n)))));
             try {
-                if (!trusted)
-                    r = new Response(403, "text/plain", "Forbidden");
-                else
-                    r = route(new Request(requestLine[0], uri.getPath(), query(uri.getRawQuery()), body));
-            } catch (Throwable t) {
-                logger.error("Request failed", t);
-                r = new Response(500, "text/plain", t.toString());
+                security.validateHeaders(headers);
+            } catch (ServerTransportSecurityException e) {
+                ((HttpServletResponse) res).sendError(e.getStatusCode(), e.getMessage());
+                return;
             }
-            var head = "HTTP/1.1 %d X\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n"
-                    .formatted(r.status(), r.type(), r.body().length);
-            var out = socket.getOutputStream();
-            out.write(head.getBytes(StandardCharsets.UTF_8));
-            out.write(r.body());
-            out.flush();
-        } catch (Exception e) {
-            logger.error("Connection failed", e);
+            chain.doFilter(req, res);
+        };
+        // The SDK's error replies embed the exception text and stack, which a client has no use for.
+        Filter shortErrors = (req, res, chain) -> {
+            var wrapped = new ShortErrors((HttpServletResponse) res);
+            chain.doFilter(req, wrapped);
+            if (wrapped.status >= 400) {
+                logger.debug("HTTP {} reply replaced; original body: {}", wrapped.status, wrapped.dropped);
+                res.setContentType("application/json");
+                res.getWriter().write("{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32600,\"message\":%s}}".formatted(
+                        quote(HttpStatus.getMessage(wrapped.status))));
+            }
+        };
+        var transport = HttpServletStreamableServerTransportProvider.builder().mcpEndpoint("/mcp")
+                .securityValidator(security).build();
+        new Mcp(driver, this).build(transport);
+
+        var context = new ServletContextHandler();
+        context.setClassLoader(DriverServer.class.getClassLoader());
+        context.addFilter(new FilterHolder(guard), "/*", null);
+        context.addFilter(new FilterHolder(shortErrors), "/mcp", null);
+        context.addServlet(new ServletHolder(transport), "/mcp");
+        var errors = new ErrorHandler();
+        errors.setShowStacks(false);
+        errors.setShowServlet(false);
+        context.setErrorHandler(errors);
+        context.addServlet(new ServletHolder(new Endpoints()), "/*");
+
+        // Daemon threads so a running server never keeps QuPath from exiting.
+        var threads = new QueuedThreadPool();
+        threads.setDaemon(true);
+        threads.setName("qupath-mcp-http");
+        server = new Server(threads);
+        var connector = new ServerConnector(server);
+        connector.setHost(InetAddress.getLoopbackAddress().getHostAddress());
+        connector.setPort(port);
+        server.addConnector(connector);
+        // Lets a request in flight, such as the one that switches the server off, finish its reply before connections close.
+        var stats = new StatisticsHandler();
+        stats.setHandler(context);
+        server.setHandler(stats);
+        server.setStopTimeout(5000);
+        server.start();
+        logger.info("MCP server on http://127.0.0.1:{}/mcp", port);
+    }
+
+    void stop() throws Exception {
+        server.stop();
+        logger.info("MCP server stopped");
+    }
+
+    /** Keeps the status of an error reply but sends its body to {@code dropped} instead of the client. */
+    private static class ShortErrors extends HttpServletResponseWrapper {
+        int status = 200;
+        final StringWriter dropped = new StringWriter();
+
+        ShortErrors(HttpServletResponse res) {
+            super(res);
+        }
+
+        @Override
+        public void setStatus(int sc) {
+            status = sc;
+            super.setStatus(sc);
+        }
+
+        @Override
+        public void sendError(int sc) {
+            setStatus(sc);
+        }
+
+        @Override
+        public void sendError(int sc, String msg) {
+            setStatus(sc);
+        }
+
+        @Override
+        public PrintWriter getWriter() throws IOException {
+            return status >= 400 ? new PrintWriter(dropped) : super.getWriter();
         }
     }
 
-    private static String readLine(BufferedInputStream in) throws IOException {
-        var sb = new StringBuilder();
-        for (int c; (c = in.read()) != -1 && c != '\n'; )
-            if (c != '\r')
-                sb.append((char) c);
-        return sb.toString();
-    }
-
-    private Response route(Request req) throws Exception {
-        return switch (req.path()) {
-            case "/groovy" -> groovy(req);
-            case "/windows" -> new Response(200, "application/json", driver.windowsJson());
-            case "/snapshot" -> {
-                var png = driver.png(req.query().get("window"));
-                yield png == null ? new Response(404, "text/plain", "No such window") : new Response(200, "image/png", png);
+    private class Endpoints extends HttpServlet {
+        @Override
+        protected void service(HttpServletRequest req, HttpServletResponse res) throws IOException {
+            logger.info("{} {}", req.getMethod(), req.getRequestURI());
+            try {
+                switch (req.getRequestURI()) {
+                    case "/groovy" -> {
+                        var code = new String(req.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                        var timeout = req.getParameter("timeout");
+                        var r = evaluate(code, timeout == null ? 60 : Double.parseDouble(timeout));
+                        send(res, 200, "application/json", "{\"ok\":%b,\"result\":%s,\"output\":%s,\"error\":%s}".formatted(
+                                r.ok(), quote(r.result()), quote(r.output()), r.error() == null ? "null" : quote(r.error())));
+                    }
+                    case "/windows" -> send(res, 200, "application/json", driver.windowsJson());
+                    case "/snapshot" -> {
+                        var png = driver.png(req.getParameter("window"), 0);
+                        if (png == null)
+                            send(res, 404, "text/plain", "No such window");
+                        else
+                            send(res, 200, "image/png", png);
+                    }
+                    default -> send(res, 404, "text/plain", "Unknown path " + req.getRequestURI());
+                }
+            } catch (Exception e) {
+                logger.error("Request failed", e);
+                send(res, 500, "text/plain", e.toString());
             }
-            default -> new Response(404, "text/plain", "Unknown path " + req.path());
-        };
+        }
+
+        private void send(HttpServletResponse res, int status, String type, String body) throws IOException {
+            send(res, status, type, body.getBytes(StandardCharsets.UTF_8));
+        }
+
+        private void send(HttpServletResponse res, int status, String type, byte[] body) throws IOException {
+            res.setStatus(status);
+            res.setContentType(type);
+            res.getOutputStream().write(body);
+        }
     }
 
-    private Response groovy(Request req) throws Exception {
-        var code = req.body();
-        double timeout = Double.parseDouble(req.query().getOrDefault("timeout", "60"));
+    /** Evaluates Groovy on its own thread so a hung script times out instead of holding the connection. */
+    Evaluation evaluate(String code, double timeout) {
         var output = new StringWriter();
         var out = new PrintWriter(output, true);
         var result = new CompletableFuture<Object>();
@@ -142,29 +221,18 @@ class DriverServer {
         worker.start();
 
         String value = "null", error = null;
-        boolean ok = true;
         try {
             value = String.valueOf(result.get((long) (timeout * 1000), TimeUnit.MILLISECONDS));
         } catch (TimeoutException e) {
             worker.interrupt();
-            ok = false;
             error = "Timed out after " + timeout + "s";
-        } catch (ExecutionException e) {
-            ok = false;
+        } catch (InterruptedException | ExecutionException e) {
             var trace = new StringWriter();
-            e.getCause().printStackTrace(new PrintWriter(trace));
+            (e instanceof ExecutionException ? e.getCause() : e).printStackTrace(new PrintWriter(trace));
             error = trace.toString();
         }
         out.flush();
-        return new Response(200, "application/json", "{\"ok\":%b,\"result\":%s,\"output\":%s,\"error\":%s}".formatted(
-                ok, quote(value), quote(output.toString()), error == null ? "null" : quote(error)));
-    }
-
-    private static Map<String, String> query(String q) {
-        if (q == null || q.isEmpty())
-            return Map.of();
-        return Arrays.stream(q.split("&")).map(kv -> kv.split("=", 2)).collect(Collectors.toMap(
-                kv -> kv[0], kv -> kv.length > 1 ? URLDecoder.decode(kv[1], StandardCharsets.UTF_8) : ""));
+        return new Evaluation(error == null, value, output.toString(), error);
     }
 
     static String quote(String s) {

@@ -2,6 +2,8 @@
 site_name = "qupath-mcp"
 site_description = "Drive QuPath's GUI from an AI agent or a test script"
 site_url = "https://earthmover-support.github.io/qupath-mcp/"
+repo_url = "https://github.com/earthmover-support/qupath-mcp"
+repo_name = "earthmover-support/qupath-mcp"
 nav = [
   { "Home" = "index.md" },
   { "Install" = "install.md" },
@@ -47,3 +49,9 @@ pymdownx.details = {}
 pymdownx.highlight = {}
 pymdownx.inlinehilite = {}
 pymdownx.superfences = {}
+pymdownx.tabbed = { alternate_style = true }
+
+# Client registration tabs are shared by the home and install pages.
+[project.markdown_extensions.pymdownx.snippets]
+base_path = ["snippets"]
+check_paths = true

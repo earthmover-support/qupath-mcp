@@ -3,16 +3,23 @@ package io.earthmover.qupath.driver;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.Writer;
+import java.awt.Image;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Function;
+import java.util.function.IntFunction;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
+import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
+import javax.imageio.ImageWriteParam;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,20 +29,37 @@ import groovy.lang.Closure;
 import groovy.lang.GroovyShell;
 import javafx.application.Platform;
 import javafx.embed.swing.SwingFXUtils;
+import javafx.beans.value.WritableValue;
+import javafx.event.Event;
 import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.control.ButtonBase;
 import javafx.scene.control.CheckBox;
+import javafx.scene.control.CheckMenuItem;
 import javafx.scene.control.ChoiceBox;
 import javafx.scene.control.ComboBox;
+import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Labeled;
 import javafx.scene.control.ListView;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuItem;
+import javafx.scene.control.RadioMenuItem;
+import javafx.scene.control.Slider;
+import javafx.scene.control.Spinner;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextInputControl;
 import javafx.scene.control.ToggleButton;
+import javafx.scene.control.TreeItem;
 import javafx.scene.control.TreeView;
+import javafx.scene.input.ContextMenuEvent;
+import javafx.scene.input.KeyCode;
+import javafx.scene.input.KeyCombination;
+import javafx.scene.input.KeyCodeCombination;
+import javafx.scene.input.KeyEvent;
+import javafx.scene.input.MouseButton;
+import javafx.scene.input.MouseEvent;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 import qupath.lib.gui.QuPathGUI;
@@ -64,18 +88,152 @@ public class GuiDriver {
         return source instanceof File f ? shell.evaluate(f) : shell.evaluate((String) source);
     }
 
-    /** PNG bytes of the first showing window whose title contains {@code titleSubstring}, or the main stage if null. */
-    byte[] png(String titleSubstring) throws Exception {
-        var image = fx(() -> {
-            Window w = titleSubstring == null ? qupath.getStage() : Window.getWindows().stream()
-                    .filter(x -> x.isShowing() && titleOf(x).contains(titleSubstring)).findFirst().orElse(null);
-            return w == null ? null : w.getScene().snapshot(null);
+    /** An encoded screenshot and its pixel size. */
+    record Shot(byte[] bytes, String mime, int width, int height) {}
+
+    /** Full-resolution PNG bytes, for the plain HTTP endpoint. */
+    byte[] png(String titleSubstring, int index) throws Exception {
+        var shot = screenshot(titleSubstring, index, Integer.MAX_VALUE, "png", 1, false, null);
+        return shot == null ? null : shot.bytes();
+    }
+
+    /**
+     * Screenshot of the {@code index}-th showing stage whose title contains {@code titleSubstring}, or the main stage if
+     * null. {@code viewer} crops to the active viewer of the main window; {@code region} is {@code [x, y, w, h]} in window
+     * coordinates. The longest side is capped at {@code maxSize}; images are never enlarged.
+     */
+    Shot screenshot(String titleSubstring, int index, int maxSize, String format, double quality, boolean viewer,
+            double[] region) throws Exception {
+        record Capture(javafx.scene.image.Image image, double[] crop, double sceneWidth) {}
+        var capture = fx(() -> {
+            var matches = viewer || titleSubstring == null ? List.<Window>of(qupath.getStage()) : stages(titleSubstring);
+            if (index >= matches.size())
+                return null;
+            var scene = matches.get(index).getScene();
+            double[] crop = region;
+            if (viewer) {
+                var b = qupath.getViewer().getView().localToScene(qupath.getViewer().getView().getBoundsInLocal());
+                crop = new double[] {b.getMinX(), b.getMinY(), b.getWidth(), b.getHeight()};
+            }
+            return new Capture(scene.snapshot(null), crop, scene.getWidth());
         });
-        if (image == null)
+        if (capture == null)
             return null;
+        // The snapshot is in device pixels, which is a multiple of the scene's size on a HiDPI display.
+        var image = SwingFXUtils.fromFXImage(capture.image(), null);
+        double scale = image.getWidth() / capture.sceneWidth();
+        if (capture.crop() != null) {
+            int x = (int) Math.max(0, capture.crop()[0] * scale), y = (int) Math.max(0, capture.crop()[1] * scale);
+            int w = (int) Math.min(image.getWidth() - x, capture.crop()[2] * scale);
+            int h = (int) Math.min(image.getHeight() - y, capture.crop()[3] * scale);
+            if (w <= 0 || h <= 0)
+                throw new IllegalArgumentException("Crop region lies outside the window");
+            image = image.getSubimage(x, y, w, h);
+        }
+        double shrink = Math.min(1, (double) maxSize / Math.max(image.getWidth(), image.getHeight()));
+        int w = Math.max(1, (int) Math.round(image.getWidth() * shrink)), h = Math.max(1, (int) Math.round(image.getHeight() * shrink));
+        boolean jpeg = "jpeg".equals(format);
+        var out = new BufferedImage(w, h, jpeg ? BufferedImage.TYPE_INT_RGB : BufferedImage.TYPE_INT_ARGB);
+        var g = out.createGraphics();
+        g.drawImage(shrink < 1 ? image.getScaledInstance(w, h, Image.SCALE_SMOOTH) : image, 0, 0, null);
+        g.dispose();
         var bytes = new ByteArrayOutputStream();
-        ImageIO.write(SwingFXUtils.fromFXImage(image, null), "png", bytes);
-        return bytes.toByteArray();
+        if (jpeg) {
+            var writer = ImageIO.getImageWritersByFormatName("jpeg").next();
+            var param = writer.getDefaultWriteParam();
+            param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+            param.setCompressionQuality((float) quality);
+            try (var ios = ImageIO.createImageOutputStream(bytes)) {
+                writer.setOutput(ios);
+                writer.write(null, new IIOImage(out, null, null), param);
+            } finally {
+                writer.dispose();
+            }
+        } else {
+            ImageIO.write(out, "png", bytes);
+        }
+        return new Shot(bytes.toByteArray(), jpeg ? "image/jpeg" : "image/png", w, h);
+    }
+
+    /** Showing stages whose title contains {@code titleSubstring}. Call on the FX thread. */
+    private List<Window> stages(String titleSubstring) {
+        return Window.getWindows().stream()
+                .filter(w -> w.isShowing() && w instanceof Stage && titleOf(w).contains(titleSubstring)).toList();
+    }
+
+    private static final String NATIVE_DIALOG = "QuPath's UI thread is not responding, so a native dialog (usually a file "
+            + "chooser, which is invisible to qupath_describe) is probably open. Close it in QuPath; to avoid it use "
+            + "qupath_open(path_or_uri) or qupath_run_groovy.";
+
+    /** Whether the FX thread picks up work within two seconds; a native file chooser blocks it. */
+    private boolean responsive() throws Exception {
+        var done = new CompletableFuture<Boolean>();
+        Platform.runLater(() -> done.complete(true));
+        try {
+            done.get(2, TimeUnit.SECONDS);
+            return true;
+        } catch (TimeoutException e) {
+            return false;
+        }
+    }
+
+    /** Page of table, list and tree rows to print: {@code limit} rows from {@code offset}; {@code controls} collects what is indexed. */
+    private record Page(int offset, int limit, List<Node> controls) {}
+
+    /**
+     * Outlines of every showing stage matching {@code titleSubstring}, each headed by its index; if null, of every stage
+     * but the main one, followed by a summary of the main window and viewer. Rows of tables, lists and trees are paged.
+     */
+    String outline(String titleSubstring, int offset, int limit) throws Exception {
+        if (!responsive())
+            throw new IllegalStateException(NATIVE_DIALOG);
+        return fx(() -> {
+            var sb = new StringBuilder();
+            if (titleSubstring != null) {
+                var matches = stages(titleSubstring);
+                for (int i = 0; i < matches.size(); i++)
+                    sb.append("[%d] ".formatted(i)).append(describe(matches.get(i), offset, limit));
+                return sb.toString().strip();
+            }
+            for (Window w : Window.getWindows())
+                if (w.isShowing() && (w instanceof Stage && w != qupath.getStage() || w instanceof ContextMenu))
+                    sb.append(describe(w, offset, limit));
+            var viewer = qupath.getViewer();
+            var data = viewer.getImageData();
+            return sb.append("%s\nimage: %s\ndownsample: %s centre: %s, %s z: %d t: %d\nannotations: %s".formatted(
+                    qupath.getStage().getTitle(), data == null ? null : data.getServer().getPath(),
+                    viewer.getDownsampleFactor(), viewer.getCenterPixelX(), viewer.getCenterPixelY(),
+                    viewer.getZPosition(), viewer.getTPosition(),
+                    data == null ? null : data.getHierarchy().getAnnotationObjects().size())).toString().strip();
+        });
+    }
+
+    /**
+     * Runs a non-blocking GUI action, gives any dialog a second to appear, and returns the action's message (if it
+     * returned one), the open windows, and the outline of each window the action opened.
+     */
+    String act(Callable<?> action) throws Exception {
+        var before = fx(() -> new ArrayList<>(Window.getWindows()));
+        var message = action.call();
+        Thread.sleep(1000);
+        if (!responsive())
+            return NATIVE_DIALOG;
+        var opened = fx(() -> {
+            var sb = new StringBuilder();
+            for (Window w : Window.getWindows())
+                if (w.isShowing() && !before.contains(w))
+                    sb.append(describe(w));
+            return sb.toString();
+        });
+        return (message == null ? "" : message + "\n\n") + windowsText()
+                + "\n\n" + (opened.isEmpty() ? "No new window opened." : "Opened by the action:\n" + opened);
+    }
+
+    /** One line per showing window: title, size and whether it has focus. */
+    String windowsText() throws Exception {
+        return fx(() -> Window.getWindows().stream().filter(Window::isShowing)
+                .map(w -> "%s — %.0fx%.0f%s".formatted(titleOf(w), w.getWidth(), w.getHeight(), w.isFocused() ? " (focused)" : ""))
+                .collect(Collectors.joining("\n")));
     }
 
     /** JSON array describing the showing windows. */
@@ -193,16 +351,49 @@ public class GuiDriver {
     public Labeled lookup(Window window, String text) throws Exception {
         var found = fx(() -> find(window.getScene().getRoot(), text));
         logger.info("lookup '{}' -> {}", text, found);
-        if (found == null)
-            throw new IllegalStateException("No node with text '" + text + "'");
+        if (found == null) {
+            var buttons = fx(() -> {
+                var all = new ArrayList<ButtonBase>();
+                findAll(window.getScene().getRoot(), ButtonBase.class, all);
+                return all.stream().map(ButtonBase::getText).filter(t -> t != null && !t.isBlank()).limit(MAX_ROWS).toList();
+            });
+            throw new IllegalStateException("No button '%s' in '%s'. Buttons: %s".formatted(text, titleOf(window),
+                    String.join(", ", buttons)));
+        }
         return found;
     }
 
     /** Returns without waiting: a handler that opens a modal dialog would otherwise block until the dialog closes. */
     public void click(Node node) {
-        logger.info("click {}", node);
-        var button = (ButtonBase) node;
-        Platform.runLater(button::fire);
+        click(node, false, false);
+    }
+
+    /**
+     * Buttons are fired; any other node, or a right or double click, gets synthetic mouse events (a context menu
+     * request for the right button), because a cell or label has no action to fire.
+     */
+    public void click(Node node, boolean right, boolean doubleClick) {
+        logger.info("click {} right={} double={}", node, right, doubleClick);
+        Platform.runLater(() -> {
+            if (node instanceof ButtonBase b && !right && !doubleClick) {
+                b.fire();
+                return;
+            }
+            var bounds = node.getBoundsInLocal();
+            var scene = node.localToScene(bounds.getCenterX(), bounds.getCenterY());
+            var screen = node.localToScreen(bounds.getCenterX(), bounds.getCenterY());
+            double sx = screen == null ? scene.getX() : screen.getX(), sy = screen == null ? scene.getY() : screen.getY();
+            if (right) {
+                Event.fireEvent(node, new ContextMenuEvent(ContextMenuEvent.CONTEXT_MENU_REQUESTED, scene.getX(),
+                        scene.getY(), sx, sy, false, null));
+                return;
+            }
+            for (int count = 1; count <= (doubleClick ? 2 : 1); count++)
+                for (var type : List.of(MouseEvent.MOUSE_PRESSED, MouseEvent.MOUSE_RELEASED, MouseEvent.MOUSE_CLICKED))
+                    Event.fireEvent(node, new MouseEvent(type, scene.getX(), scene.getY(), sx, sy, MouseButton.PRIMARY,
+                            count, false, false, false, false, type == MouseEvent.MOUSE_PRESSED, false, false, true,
+                            false, true, null));
+        });
     }
 
     /** Finds a menu item by a path such as {@code Help>About}. */
@@ -224,30 +415,44 @@ public class GuiDriver {
         return found;
     }
 
-    /** Returns without waiting, for the same reason as {@link #click}. */
+    /**
+     * Returns without waiting, for the same reason as {@link #click}. Firing alone does not change a check or radio
+     * item's state; the menu does that first when it is clicked, so this does too.
+     */
     public void fire(MenuItem item) {
         logger.info("fire {}", item.getText());
-        Platform.runLater(item::fire);
+        Platform.runLater(() -> {
+            if (item instanceof CheckMenuItem c)
+                c.setSelected(!c.isSelected());
+            else if (item instanceof RadioMenuItem r)
+                r.setSelected(true);
+            item.fire();
+        });
     }
 
-    public void typeInto(Window window, String text, int field) throws Exception {
-        fx(() -> {
+    /** Sets the text of the {@code field}-th text field and returns the text it then holds. */
+    public String typeInto(Window window, String text, int field) throws Exception {
+        var result = fx(() -> {
             var fields = new ArrayList<TextInputControl>();
             findAll(window.getScene().getRoot(), TextInputControl.class, fields);
             if (field >= fields.size())
                 throw new IllegalStateException("No text field #" + field + " in window (found " + fields.size() + ")");
             fields.get(field).setText(text);
-            return null;
+            return fields.get(field).getText();
         });
         logger.info("typed '{}' into field {}", text, field);
+        return result;
     }
 
-    /** The showing stage whose title contains {@code titleSubstring}; if null, the focused or topmost non-main stage, else the main one. */
+    /** The showing stage whose title contains {@code titleSubstring}; if null, an open context menu, else the focused or topmost non-main stage, else the main one. */
     public Window window(String titleSubstring) throws Exception {
         Window found = fx(() -> {
             var stages = Window.getWindows().stream().filter(w -> w.isShowing() && w instanceof Stage).toList();
             if (titleSubstring != null)
                 return stages.stream().filter(w -> titleOf(w).contains(titleSubstring)).findFirst().orElse(null);
+            var menus = Window.getWindows().stream().filter(w -> w.isShowing() && w instanceof ContextMenu).toList();
+            if (!menus.isEmpty())
+                return menus.get(menus.size() - 1);
             var others = stages.stream().filter(w -> w != qupath.getStage()).toList();
             return others.stream().filter(Window::isFocused).findFirst()
                     .orElse(others.isEmpty() ? qupath.getStage() : others.get(others.size() - 1));
@@ -273,9 +478,13 @@ public class GuiDriver {
 
     /** Text outline of the window's controls, one per line, indented by nesting of the controls shown. */
     public String describe(Window window) throws Exception {
+        return describe(window, 0, MAX_ROWS);
+    }
+
+    public String describe(Window window, int offset, int limit) throws Exception {
         return fx(() -> {
             var sb = new StringBuilder(titleOf(window)).append('\n');
-            describe(window.getScene().getRoot(), 0, sb);
+            describe(window.getScene().getRoot(), 0, sb, new Page(offset, limit, new ArrayList<>()));
             return sb.toString();
         });
     }
@@ -295,8 +504,8 @@ public class GuiDriver {
         }
     }
 
-    private static String titleOf(Window w) {
-        return w instanceof Stage s && s.getTitle() != null ? s.getTitle() : "untitled";
+    static String titleOf(Window w) {
+        return w instanceof Stage s && s.getTitle() != null ? s.getTitle() : w instanceof ContextMenu ? "context menu" : "untitled";
     }
 
     private static Labeled find(Node node, String text) {
@@ -321,13 +530,27 @@ public class GuiDriver {
 
     private static final int MAX_ROWS = 20;
 
-    private static void describe(Node node, int depth, StringBuilder sb) {
+    /** Marks a control that qupath_select, qupath_set and their {@code control} argument can address. */
+    private static String tag(Node node, Page page) {
+        page.controls().add(node);
+        return "#" + (page.controls().size() - 1) + " ";
+    }
+
+    /** The rows {@code offset} to {@code offset + limit} of {@code total}, then a line saying which rows those were. */
+    private static void rows(StringBuilder sb, int depth, Page page, int total, IntFunction<String> row) {
+        int from = Math.min(page.offset(), total), to = Math.min(total, from + page.limit());
+        for (int i = from; i < to; i++)
+            sb.append("  ".repeat(depth + 1)).append(row.apply(i)).append('\n');
+        sb.append("  ".repeat(depth + 1)).append(total == 0 ? "rows 0 of 0" : "rows %d–%d of %d".formatted(from + 1, to, total)).append('\n');
+    }
+
+    private static void describe(Node node, int depth, StringBuilder sb, Page page) {
         if (!node.isVisible())
             return;
         String line = null;
         boolean recurse = false;
         if (node instanceof ButtonBase b) {
-            line = "%s \"%s\"%s".formatted(b.getClass().getSimpleName(), b.getText(),
+            line = "%s%s \"%s\"%s".formatted(b instanceof CheckBox ? tag(b, page) : "", b.getClass().getSimpleName(), b.getText(),
                     (b instanceof ToggleButton t && t.isSelected() || b instanceof CheckBox c && c.isSelected() ? " [selected]" : "")
                             + (b.isDisabled() ? " [disabled]" : ""));
         } else if (node instanceof Labeled l) {
@@ -335,30 +558,38 @@ public class GuiDriver {
                 line = "%s \"%s\"".formatted(l.getClass().getSimpleName(), l.getText());
             recurse = true;
         } else if (node instanceof TextInputControl t) {
-            line = "%s prompt=\"%s\" text=\"%s\"%s".formatted(t.getClass().getSimpleName(),
+            line = "%s%s prompt=\"%s\" text=\"%s\"%s".formatted(tag(t, page), t.getClass().getSimpleName(),
                     Objects.toString(t.getPromptText(), ""), t.getText(), t.isDisabled() ? " [disabled]" : "");
+        } else if (node instanceof Spinner<?> sp) {
+            line = "%sSpinner value=%s%s".formatted(tag(sp, page), sp.getValue(), sp.isDisabled() ? " [disabled]" : "");
+        } else if (node instanceof Slider sl) {
+            line = "%sSlider value=%s range=%s..%s".formatted(tag(sl, page), sl.getValue(), sl.getMin(), sl.getMax());
         } else if (node instanceof ComboBox<?> c) {
-            line = "ComboBox value=%s items=%s".formatted(c.getValue(), first(c.getItems()));
+            line = "%sComboBox value=%s items=%s".formatted(tag(c, page), c.getValue(), first(c.getItems()));
         } else if (node instanceof ChoiceBox<?> c) {
-            line = "ChoiceBox value=%s items=%s".formatted(c.getValue(), first(c.getItems()));
+            line = "%sChoiceBox value=%s items=%s".formatted(tag(c, page), c.getValue(), first(c.getItems()));
+        } else if (node instanceof TabPane tp) {
+            sb.append("  ".repeat(depth)).append("%sTabPane tabs=%s selected=%s".formatted(tag(tp, page),
+                    tp.getTabs().stream().map(Tab::getText).toList(),
+                    tp.getSelectionModel().getSelectedItem() == null ? null : tp.getSelectionModel().getSelectedItem().getText())).append('\n');
+            var selected = tp.getSelectionModel().getSelectedItem();
+            if (selected != null && selected.getContent() != null)
+                describe(selected.getContent(), depth + 1, sb, page);
+            return;
         } else if (node instanceof TableView<?> t) {
-            line = "TableView columns=%s rows=%d".formatted(
-                    t.getColumns().stream().map(c -> c.getText()).toList(), t.getItems().size());
-            sb.append("  ".repeat(depth)).append(line).append('\n');
-            for (int i = 0; i < Math.min(MAX_ROWS, t.getItems().size()); i++) {
-                int row = i;
-                sb.append("  ".repeat(depth + 1))
-                        .append(t.getColumns().stream().map(c -> String.valueOf(c.getCellData(row))).collect(Collectors.joining(" | ")))
-                        .append('\n');
-            }
+            sb.append("  ".repeat(depth)).append("%sTableView columns=%s".formatted(tag(t, page),
+                    t.getColumns().stream().map(c -> c.getText()).toList())).append('\n');
+            rows(sb, depth, page, t.getItems().size(), row ->
+                    t.getColumns().stream().map(c -> String.valueOf(c.getCellData(row))).collect(Collectors.joining(" | ")));
             return;
         } else if (node instanceof ListView<?> v) {
-            line = "ListView items=%d %s".formatted(v.getItems().size(), first(v.getItems()));
+            sb.append("  ".repeat(depth)).append(tag(v, page)).append("ListView\n");
+            rows(sb, depth, page, v.getItems().size(), row -> String.valueOf(v.getItems().get(row)));
+            return;
         } else if (node instanceof TreeView<?> v) {
-            line = "TreeView";
-            sb.append("  ".repeat(depth)).append(line).append('\n');
-            for (int i = 0; i < Math.min(MAX_ROWS, v.getExpandedItemCount()); i++)
-                sb.append("  ".repeat(depth + 1 + v.getTreeItemLevel(v.getTreeItem(i)))).append(v.getTreeItem(i).getValue()).append('\n');
+            sb.append("  ".repeat(depth)).append(tag(v, page)).append("TreeView\n");
+            rows(sb, depth, page, v.getExpandedItemCount(),
+                    row -> "  ".repeat(v.getTreeItemLevel(v.getTreeItem(row))) + v.getTreeItem(row).getValue());
             return;
         } else {
             recurse = true;
@@ -369,10 +600,243 @@ public class GuiDriver {
         }
         if (recurse && node instanceof Parent p)
             for (Node child : p.getChildrenUnmodifiable())
-                describe(child, depth, sb);
+                describe(child, depth, sb, page);
     }
 
-    private static List<?> first(List<?> items) {
-        return items.size() <= MAX_ROWS ? items : items.subList(0, MAX_ROWS);
+    private static Object first(List<?> items) {
+        return items.size() <= MAX_ROWS ? items : items.subList(0, MAX_ROWS) + " (first %d of %d)".formatted(MAX_ROWS, items.size());
+    }
+
+    /** A GUI change worked out on the FX thread and applied later, so a handler that opens a modal dialog cannot block the caller. */
+    private record Change(Runnable apply, String message) {}
+
+    /** The controls of the window that carry a {@code #n} tag in {@code describe}, narrowed by a {@code #n} index or label text. */
+    private List<Node> controls(Window window, String control) {
+        var page = new Page(0, 0, new ArrayList<>());
+        describe(window.getScene().getRoot(), 0, new StringBuilder(), page);
+        var all = page.controls();
+        if (control == null)
+            return all;
+        var index = control.strip().replaceFirst("^#", "");
+        if (index.matches("\\d+"))
+            return Integer.parseInt(index) < all.size() ? List.of(all.get(Integer.parseInt(index))) : List.of();
+        return all.stream().filter(n -> label(n).contains(control)).toList();
+    }
+
+    /** The text of the label next to a control: its {@code labelFor} label, else the label just before it in its parent. */
+    private static String label(Node node) {
+        if (node instanceof Labeled l && l.getText() != null)
+            return l.getText();
+        if (node.getParent() == null)
+            return "";
+        Labeled previous = null;
+        for (Node sibling : node.getParent().getChildrenUnmodifiable()) {
+            if (sibling == node)
+                break;
+            if (sibling instanceof Labeled l && !(l instanceof ButtonBase))
+                previous = l;
+        }
+        return previous == null || previous.getText() == null ? "" : previous.getText();
+    }
+
+    /** The first item whose name equals {@code text}, else the first that contains it. */
+    private static <T> T pick(List<T> items, String text, Function<T, String> name) {
+        return items.stream().filter(i -> text.equals(name.apply(i))).findFirst()
+                .orElse(items.stream().filter(i -> name.apply(i).contains(text)).findFirst().orElse(null));
+    }
+
+    private static void collect(TreeItem<?> item, List<TreeItem<?>> into) {
+        into.add(item);
+        for (var child : item.getChildren())
+            collect(child, into);
+    }
+
+    private static <T> Change choose(String text, String shown, List<T> items, Function<T, String> name,
+            java.util.function.Consumer<T> select) {
+        var item = pick(items, text, name);
+        return item == null ? null : new Change(() -> select.accept(item), "selected \"%s\" in %s".formatted(name.apply(item), shown));
+    }
+
+    private static <T> Change selectIn(ComboBox<T> c, String text) {
+        return choose(text, "ComboBox", c.getItems(),
+                i -> c.getConverter() == null ? String.valueOf(i) : c.getConverter().toString(i), c::setValue);
+    }
+
+    private static <T> Change selectIn(ChoiceBox<T> c, String text) {
+        return choose(text, "ChoiceBox", c.getItems(),
+                i -> c.getConverter() == null ? String.valueOf(i) : c.getConverter().toString(i), c::setValue);
+    }
+
+    private static <T> Change selectIn(ListView<T> v, String text) {
+        return choose(text, "ListView", v.getItems(), String::valueOf, i -> {
+            v.getSelectionModel().select(i);
+            v.scrollTo(i);
+        });
+    }
+
+    private static <T> Change selectIn(TreeView<T> v, String text) {
+        var all = new ArrayList<TreeItem<?>>();
+        if (v.getRoot() != null)
+            collect(v.getRoot(), all);
+        return choose(text, "TreeView", all, i -> String.valueOf(i.getValue()), item -> {
+            for (var parent = item.getParent(); parent != null; parent = parent.getParent())
+                parent.setExpanded(true);
+            @SuppressWarnings("unchecked") var typed = (TreeItem<T>) item;
+            v.getSelectionModel().select(typed);
+            v.scrollTo(v.getRow(typed));
+        });
+    }
+
+    private static Change selectIn(TabPane tp, String text) {
+        return choose(text, "TabPane", tp.getTabs(), t -> Objects.toString(t.getText(), ""),
+                t -> tp.getSelectionModel().select(t));
+    }
+
+    /** Rows with a cell whose text equals {@code text} (else contains it); with {@code check}, ticks the row's checkbox cell. */
+    private static <T> Change selectIn(TableView<T> t, String text, Boolean check) {
+        IntFunction<List<String>> cells = row -> t.getColumns().stream().map(c -> String.valueOf(c.getCellData(row))).toList();
+        var exact = new ArrayList<Integer>();
+        var partial = new ArrayList<Integer>();
+        for (int row = 0; row < t.getItems().size(); row++) {
+            if (cells.apply(row).contains(text))
+                exact.add(row);
+            else if (cells.apply(row).stream().anyMatch(c -> c.contains(text)))
+                partial.add(row);
+        }
+        var matched = exact.isEmpty() ? partial : exact;
+        if (matched.isEmpty())
+            return null;
+        if (check == null)
+            return new Change(() -> {
+                t.getSelectionModel().select(matched.get(0));
+                t.scrollTo(matched.get(0));
+            }, "selected row %d of TableView".formatted(matched.get(0)));
+        var boxes = new ArrayList<WritableValue<Object>>();
+        for (int row : matched)
+            for (var column : t.getColumns())
+                if (column.getCellObservableValue(row) instanceof WritableValue<?> w && w.getValue() instanceof Boolean) {
+                    @SuppressWarnings("unchecked") var box = (WritableValue<Object>) w;
+                    boxes.add(box);
+                    break;
+                }
+        if (boxes.size() != matched.size())
+            throw new IllegalStateException("The TableView has no checkbox column on %d of the %d matching rows".formatted(
+                    matched.size() - boxes.size(), matched.size()));
+        return new Change(() -> boxes.forEach(b -> b.setValue(check)),
+                "%s %d rows of TableView".formatted(check ? "checked" : "unchecked", boxes.size()));
+    }
+
+    /**
+     * Selects the item named {@code text} in a combo box, choice box, list, tree (expanding its parents), tab pane or
+     * table (a row with a cell of that text) of the window; {@code control} narrows the controls tried. With {@code check}, a table's
+     * matching rows have their checkbox ticked or cleared instead. Returns without waiting for handlers.
+     */
+    public String select(Window window, String text, String control, Boolean check) throws Exception {
+        var change = fx(() -> {
+            for (Node node : controls(window, control)) {
+                Change c = node instanceof ComboBox<?> n ? selectIn(n, text) : node instanceof ChoiceBox<?> n ? selectIn(n, text)
+                        : node instanceof ListView<?> n ? selectIn(n, text) : node instanceof TreeView<?> n ? selectIn(n, text)
+                        : node instanceof TabPane n ? selectIn(n, text) : node instanceof TableView<?> n ? selectIn(n, text, check) : null;
+                if (c != null)
+                    return c;
+            }
+            throw new IllegalStateException("No item '%s' in %s; qupath_describe lists the controls and their rows".formatted(
+                    text, control == null ? "any combo box, list, tree, tab pane or table" : "control " + control));
+        });
+        logger.info("select {}", change.message());
+        Platform.runLater(change.apply());
+        return change.message();
+    }
+
+    /** Sets a spinner, slider, checkbox or text field picked by {@code control} (a {@code #n} from describe, or its label's text). */
+    public String set(Window window, String value, String control) throws Exception {
+        var change = fx(() -> {
+            var matches = controls(window, control);
+            if (matches.isEmpty())
+                throw new IllegalStateException("No control '%s'; qupath_describe shows each as #n".formatted(control));
+            var node = matches.get(0);
+            Runnable apply;
+            if (node instanceof Spinner<?> sp) {
+                @SuppressWarnings("unchecked") var factory = (javafx.scene.control.SpinnerValueFactory<Object>) sp.getValueFactory();
+                var parsed = factory.getConverter().fromString(value);
+                apply = () -> factory.setValue(parsed);
+            } else if (node instanceof Slider sl) {
+                double v = Double.parseDouble(value);
+                apply = () -> sl.setValue(v);
+            } else if (node instanceof CheckBox cb) {
+                boolean v = Boolean.parseBoolean(value);
+                apply = () -> cb.setSelected(v);
+            } else if (node instanceof TextInputControl t) {
+                apply = () -> t.setText(value);
+            } else {
+                throw new IllegalStateException("%s cannot be set; use qupath_select for lists, tabs and combo boxes".formatted(
+                        node.getClass().getSimpleName()));
+            }
+            return new Change(apply, "set %s %s to %s".formatted(node.getClass().getSimpleName(), label(node), value));
+        });
+        logger.info("{}", change.message());
+        Platform.runLater(change.apply());
+        return change.message();
+    }
+
+    /**
+     * Fires key presses, space-separated such as {@code Ctrl+A} or {@code Tab Enter}, at the window's focused node (else its
+     * scene), where the scene's accelerators and default and cancel buttons see them as they would a keyboard's. Returns
+     * without waiting.
+     */
+    public String key(Window window, String keys) throws Exception {
+        var events = new ArrayList<KeyEvent>();
+        boolean mac = System.getProperty("os.name", "").toLowerCase().contains("mac");
+        for (String spec : keys.trim().split("\\s+")) {
+            var combo = KeyCombination.valueOf(keyNames(spec));
+            if (!(combo instanceof KeyCodeCombination k))
+                throw new IllegalArgumentException("Not a key: " + spec);
+            boolean shortcut = k.getShortcut() == KeyCombination.ModifierValue.DOWN;
+            boolean ctrl = k.getControl() == KeyCombination.ModifierValue.DOWN || shortcut && !mac;
+            boolean meta = k.getMeta() == KeyCombination.ModifierValue.DOWN || shortcut && mac;
+            for (var type : List.of(KeyEvent.KEY_PRESSED, KeyEvent.KEY_RELEASED))
+                events.add(new KeyEvent(type, KeyEvent.CHAR_UNDEFINED, k.getCode().getName(), k.getCode(),
+                        k.getShift() == KeyCombination.ModifierValue.DOWN, ctrl, k.getAlt() == KeyCombination.ModifierValue.DOWN, meta));
+        }
+        var target = fx(() -> window.getScene().getFocusOwner() != null ? window.getScene().getFocusOwner() : window.getScene().getRoot());
+        logger.info("keys '{}' -> {}", keys, target);
+        Platform.runLater(() -> events.forEach(e -> Event.fireEvent(target, e)));
+        return "sent %s to %s".formatted(keys, target.getClass().getSimpleName());
+    }
+
+    /**
+     * Opens an image by path or URI in the active viewer. QuPath may prompt (for example about unsaved changes), so this waits
+     * only a few seconds for the result.
+     */
+    public String open(String pathOrUri) throws Exception {
+        logger.info("open {}", pathOrUri);
+        var result = new CompletableFuture<Boolean>();
+        var thread = new Thread(() -> {
+            try {
+                result.complete(qupath.openImage(qupath.getViewer(), pathOrUri, false, false));
+            } catch (Throwable t) {
+                result.completeExceptionally(t);
+            }
+        }, "qupath-gui-driver-open");
+        thread.setDaemon(true);
+        thread.start();
+        try {
+            return result.get(5, TimeUnit.SECONDS) ? "opened " + pathOrUri : "QuPath did not open " + pathOrUri;
+        } catch (TimeoutException e) {
+            return "still opening " + pathOrUri + "; a prompt may be waiting, see the windows below";
+        } catch (java.util.concurrent.ExecutionException e) {
+            throw new IllegalStateException("Could not open %s: %s".formatted(pathOrUri, e.getCause()), e.getCause());
+        }
+    }
+
+    /** JavaFX names some keys differently from their enum constants ("Esc" for ESCAPE); accept either spelling. */
+    private static String keyNames(String spec) {
+        var parts = spec.split("\\+");
+        try {
+            parts[parts.length - 1] = KeyCode.valueOf(parts[parts.length - 1].toUpperCase()).getName();
+        } catch (IllegalArgumentException notAnEnumName) {
+            return spec;
+        }
+        return String.join("+", parts);
     }
 }

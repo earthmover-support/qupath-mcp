@@ -1,11 +1,8 @@
 # Security
 
-The endpoint runs arbitrary Groovy as your user, and any local process can call it.
+The MCP server lets the connected agent run any code in QuPath, as you, with access to your files. Give it only as much trust as you give your coding agent.
 
-Protections:
-
-- It is off unless `qupath.driver.port` is set. With only `qupath.driver.script` set, QuPath runs that file and opens no port.
-- It listens on 127.0.0.1 only.
-- It rejects any request that carries an `Origin` header or a `Host` other than `127.0.0.1` or `localhost`. A web page in your browser cannot reach it, even through DNS rebinding, where a page points its own hostname at 127.0.0.1 to look local. `curl -H "Origin: http://evil.example"` returns 403 (checked 2026-10-08).
-
-Use it for testing only. Never ship the jar to end users.
+- **It is on whenever the jar is installed.** Installing the jar is the opt-in; QuPath starts the server at launch.
+- **Any program on this computer can reach it.** It listens on the loopback address 127.0.0.1 only, but any local process can send it code to run. Don't install the jar on a shared machine.
+- **Requests from web pages are rejected.** The server returns an error for any request whose `Origin` is not `http://127.0.0.1:<port>` or `http://localhost:<port>`, or whose `Host` is not `127.0.0.1` or `localhost` with the port. A page in your browser cannot reach it, even through DNS rebinding, where a page points its own hostname at 127.0.0.1 to look local. The check applies to `/mcp` and to the plain HTTP endpoints. MCP clients and `curl` send no `Origin` header and pass.
+- **Turn it off when you're not using it.** Untick **Extensions ▸ MCP server**, or remove the jar.

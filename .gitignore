@@ -11,10 +11,6 @@ gradle.properties
 
 .DS_Store
 
-# Python
-.venv/
-__pycache__/
-
 # Docs
 /site/
 .pixi/
