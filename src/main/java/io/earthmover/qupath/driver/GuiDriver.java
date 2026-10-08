@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
 import java.util.function.IntFunction;
+import java.util.function.IntSupplier;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -39,7 +40,9 @@ import javafx.scene.control.CheckMenuItem;
 import javafx.scene.control.ChoiceBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.ContextMenu;
+import javafx.scene.control.IndexedCell;
 import javafx.scene.control.Labeled;
+import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuItem;
@@ -48,11 +51,14 @@ import javafx.scene.control.Slider;
 import javafx.scene.control.Spinner;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
+import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextInputControl;
 import javafx.scene.control.ToggleButton;
 import javafx.scene.control.Tooltip;
+import javafx.scene.control.TreeCell;
 import javafx.scene.control.TreeItem;
+import javafx.scene.control.TreeTableRow;
 import javafx.scene.control.TreeView;
 import javafx.scene.input.ContextMenuEvent;
 import javafx.scene.input.KeyCode;
@@ -753,21 +759,51 @@ public class GuiDriver {
         return items.size() <= MAX_ROWS ? items : items.subList(0, MAX_ROWS) + " (first %d of %d)".formatted(MAX_ROWS, items.size());
     }
 
-    /** A GUI change worked out on the FX thread and applied later, so a handler that opens a modal dialog cannot block the caller. */
-    /** {@code action} is the short form shown to the person watching; {@code message} is the reply to the agent. */
-    private record Change(Runnable apply, String message, String action, Node target) {
+    /**
+     * A GUI change worked out on the FX thread and applied later, so a handler that opens a modal dialog cannot block the
+     * caller. {@code action} is the short form shown to the person watching; {@code message} is the reply to the agent.
+     * {@code row}, if set, gives the row of a list, tree or table that the change selects once it has been applied.
+     */
+    private record Change(Runnable apply, String message, String action, Node target, IntSupplier row) {
+        Change(Runnable apply, String message, String action, Node target) {
+            this(apply, message, action, target, null);
+        }
+
         Change at(Node node) {
-            return new Change(apply, message, action, target == null ? node : target);
+            return new Change(apply, message, action, target == null ? node : target, row);
+        }
+
+        Change row(IntSupplier row) {
+            return new Change(apply, message, action, target, row);
         }
     }
 
     /** Dispatches a change worked out by {@link #select} or {@link #set}, marking its target for the person watching. */
     private String apply(Change change) {
         logger.info("{}", change.message());
-        indicator.before(change.target(), change.action());
-        Platform.runLater(change.apply());
-        indicator.mark(change.target(), change.action());
+        if (change.row() == null) {
+            indicator.before(change.target(), change.action());
+            Platform.runLater(change.apply());
+            indicator.mark(change.target(), change.action());
+        } else {
+            // The row's cell exists only once the change has scrolled it into view, so it is marked afterwards.
+            Platform.runLater(change.apply());
+            indicator.markLater(() -> rowCell(change.target(), change.row().getAsInt()), change.target(), change.action());
+        }
         return change.message();
+    }
+
+    /**
+     * The cell showing row {@code index} of a list, tree, table or tree table, or null while that row is scrolled out
+     * of view. These controls create cells only for the visible rows, so call it after the row has been scrolled to.
+     */
+    private static Node rowCell(Node control, int index) {
+        if (control == null || index < 0)
+            return null;
+        return control.lookupAll(".indexed-cell").stream()
+                .filter(n -> n instanceof IndexedCell<?> c && c.getIndex() == index && !c.isEmpty() && c.isVisible()
+                        && (c instanceof ListCell || c instanceof TreeCell || c instanceof TableRow || c instanceof TreeTableRow))
+                .findFirst().orElse(null);
     }
 
     /** The controls of the window that carry a {@code #n} tag in {@code describe}, narrowed by a {@code #n} index or label text. */
@@ -829,23 +865,25 @@ public class GuiDriver {
     }
 
     private static <T> Change selectIn(ListView<T> v, String text) {
-        return choose(text, "ListView", v.getItems(), String::valueOf, i -> {
+        var change = choose(text, "ListView", v.getItems(), String::valueOf, i -> {
             v.getSelectionModel().select(i);
             v.scrollTo(i);
         });
+        return change == null ? null : change.row(() -> v.getSelectionModel().getSelectedIndex());
     }
 
     private static <T> Change selectIn(TreeView<T> v, String text) {
         var all = new ArrayList<TreeItem<?>>();
         if (v.getRoot() != null)
             collect(v.getRoot(), all);
-        return choose(text, "TreeView", all, i -> String.valueOf(i.getValue()), item -> {
+        var change = choose(text, "TreeView", all, i -> String.valueOf(i.getValue()), item -> {
             for (var parent = item.getParent(); parent != null; parent = parent.getParent())
                 parent.setExpanded(true);
             @SuppressWarnings("unchecked") var typed = (TreeItem<T>) item;
             v.getSelectionModel().select(typed);
             v.scrollTo(v.getRow(typed));
         });
+        return change == null ? null : change.row(() -> v.getSelectionModel().getSelectedIndex());
     }
 
     /** Targets the tab's header, so the mark lands on what a person would click rather than the whole pane. */
@@ -878,7 +916,8 @@ public class GuiDriver {
             return new Change(() -> {
                 t.getSelectionModel().select(matched.get(0));
                 t.scrollTo(matched.get(0));
-            }, "selected row %d of TableView".formatted(matched.get(0)), "select “%s”".formatted(text), null);
+            }, "selected row %d of TableView".formatted(matched.get(0)), "select “%s”".formatted(text), null)
+                    .row(() -> matched.get(0));
         var boxes = new ArrayList<WritableValue<Object>>();
         for (int row : matched)
             for (var column : t.getColumns())
@@ -890,9 +929,12 @@ public class GuiDriver {
         if (boxes.size() != matched.size())
             throw new IllegalStateException("The TableView has no checkbox column on %d of the %d matching rows".formatted(
                     matched.size() - boxes.size(), matched.size()));
-        return new Change(() -> boxes.forEach(b -> b.setValue(check)),
-                "%s %d rows of TableView".formatted(check ? "checked" : "unchecked", boxes.size()),
-                "%s “%s”".formatted(check ? "tick" : "untick", text), null);
+        // Scrolled to the first ticked row, so the person watching sees it change.
+        return new Change(() -> {
+            boxes.forEach(b -> b.setValue(check));
+            t.scrollTo(matched.get(0));
+        }, "%s %d rows of TableView".formatted(check ? "checked" : "unchecked", boxes.size()),
+                "%s “%s”".formatted(check ? "tick" : "untick", text), null).row(() -> matched.get(0));
     }
 
     /**

@@ -29,8 +29,8 @@ QuPath shows the person at the screen what the agent does, in one of three modes
 
 | Mode | What it shows | Effect on the agent |
 |---|---|---|
-| **Mark** (default) | A ring on each control the agent clicks, types into, selects or sets; a crosshair where the viewer moves to; a keycap for key presses. A panel in the window's lower right lists the last six actions, including menu items, opened images and Groovy runs, and fades after 4 s without activity. A badge names the client, as *Claude Code is driving*, while a tool call runs. | None. The marks are drawn after the action is dispatched. |
-| **Paced** | The same, and before each action a pointer moves to the control, or the menu path, key or viewer position shows at the top of the window. | Waits the paced delay (default 1000 ms) before each action. |
+| **Mark** (default) | A ring on each control the agent clicks, types into, selects or sets, or on the row a selection picks in a list, tree or table; a crosshair where the viewer moves to; a keycap for key presses. A panel in the window's lower right lists the last six actions, including menu items, opened images and Groovy runs, and fades after 4 s without activity. A badge names the client, as *Claude Code is driving*, while a tool call runs. | None. The marks are drawn after the action is dispatched. |
+| **Paced** | The same, and before each action a pointer moves to the control, or the menu path, key or viewer position shows at the top of the window. For a row in a list, tree or table, the pointer moves once the selection has scrolled the row into view. | Waits the paced delay (default 1000 ms) before each action. |
 | **Off** | Nothing. | None. |
 
 Paced suits screen recordings and anyone following along. The person sets the mode under **Extensions ▸ Show agent actions** and the delay with the *Paced delay (ms)* preference; the agent sets both with `qupath_show_actions`. Both persist across restarts.

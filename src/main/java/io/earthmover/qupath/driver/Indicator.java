@@ -2,6 +2,8 @@ package io.earthmover.qupath.driver;
 
 import java.util.function.Supplier;
 
+import javafx.animation.PauseTransition;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -57,7 +59,8 @@ class Indicator {
             + "-fx-border-color: #D97757; -fx-border-radius: 8;";
     private static final int LOG_LINES = 6;
     private static final Duration MARK_HOLD = Duration.millis(700), FADE = Duration.millis(400),
-            LOG_HOLD = Duration.seconds(4), BADGE_HOLD = Duration.millis(1500), POINTER_HOLD = Duration.millis(1500);
+            LOG_HOLD = Duration.seconds(4), BADGE_HOLD = Duration.millis(1500), POINTER_HOLD = Duration.millis(1500),
+            SETTLE = Duration.millis(100);
 
     private final QuPathGUI qupath;
     private int busy;
@@ -80,20 +83,23 @@ class Indicator {
     void before(Node target, String action) {
         if (mode.get() != Mode.PACED || target == null)
             return;
-        pace(() -> {
-            var o = overlay(target.getScene());
-            if (o == null)
-                return;
-            var c = centre(o, target);
-            var pointer = pointer(o);
-            var t = new TranslateTransition(Duration.millis(Math.max(1, delayMs.get() * 0.8)), pointer);
-            t.setToX(c.getX());
-            t.setToY(c.getY());
-            t.setInterpolator(Interpolator.EASE_BOTH);
-            show(pointer);
-            t.play();
-            hideLater(pointer, Duration.millis(delayMs.get()).add(POINTER_HOLD));
-        });
+        pace(() -> glide(target));
+    }
+
+    /** Moves the pointer to {@code target} over most of the paced delay. Call on the FX thread. */
+    private static void glide(Node target) {
+        var o = overlay(target.getScene());
+        if (o == null)
+            return;
+        var c = centre(o, target);
+        var pointer = pointer(o);
+        var t = new TranslateTransition(Duration.millis(Math.max(1, delayMs.get() * 0.8)), pointer);
+        t.setToX(c.getX());
+        t.setToY(c.getY());
+        t.setInterpolator(Interpolator.EASE_BOTH);
+        show(pointer);
+        t.play();
+        hideLater(pointer, Duration.millis(delayMs.get()).add(POINTER_HOLD));
     }
 
     /** In paced mode, shows {@code action} (a menu path, say) at the top of the main window and waits {@link #delayMs}. */
@@ -126,31 +132,68 @@ class Indicator {
             }
     }
 
+    /**
+     * Rings the node {@code target} supplies once the action has had a moment to lay out, such as a list row scrolled
+     * into view by the selection; {@code fallback} if it supplies none. Such a target doesn't exist before the action,
+     * so paced mode moves the pointer to it afterwards, rings it when the pointer arrives, and waits {@link #delayMs}.
+     */
+    void markLater(Supplier<Node> target, Node fallback, String action) {
+        if (!on())
+            return;
+        boolean paced = mode.get() == Mode.PACED;
+        run(() -> {
+            var settle = new PauseTransition(SETTLE);
+            settle.setOnFinished(e -> {
+                var supplied = target.get();
+                var node = supplied != null ? supplied : fallback;
+                if (!paced || node == null) {
+                    ring(node, action);
+                    return;
+                }
+                glide(node);
+                var arrive = new PauseTransition(Duration.millis(delayMs.get() * 0.8));
+                arrive.setOnFinished(f -> ring(node, action));
+                arrive.play();
+            });
+            settle.play();
+        });
+        if (paced && !Platform.isFxApplicationThread())
+            try {
+                Thread.sleep((long) (SETTLE.toMillis() + delayMs.get()));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+    }
+
     /** Rings {@code target} and logs {@code action} in its window. */
     void mark(Node target, String action) {
         if (!on() || target == null)
             return;
-        run(() -> {
-            var o = overlay(target.getScene());
-            if (o == null)
-                return;
-            var b = o.sceneToLocal(target.localToScene(target.getBoundsInLocal()));
-            var ring = new Rectangle(b.getMinX() - 3, b.getMinY() - 3, b.getWidth() + 6, b.getHeight() + 6);
-            ring.setArcWidth(10);
-            ring.setArcHeight(10);
-            ring.setFill(ACCENT.deriveColor(0, 1, 1, 0.18));
-            ring.setStroke(ACCENT);
-            ring.setStrokeWidth(2.5);
-            o.getChildren().add(ring);
-            var pulse = new ScaleTransition(Duration.millis(220), ring);
-            pulse.setFromX(1.15);
-            pulse.setFromY(1.4);
-            pulse.setToX(1);
-            pulse.setToY(1);
-            pulse.play();
-            fadeOut(ring, hold());
-            log(o, action);
-        });
+        run(() -> ring(target, action));
+    }
+
+    private void ring(Node target, String action) {
+        if (target == null)
+            return;
+        var o = overlay(target.getScene());
+        if (o == null)
+            return;
+        var b = o.sceneToLocal(target.localToScene(target.getBoundsInLocal()));
+        var ring = new Rectangle(b.getMinX() - 3, b.getMinY() - 3, b.getWidth() + 6, b.getHeight() + 6);
+        ring.setArcWidth(10);
+        ring.setArcHeight(10);
+        ring.setFill(ACCENT.deriveColor(0, 1, 1, 0.18));
+        ring.setStroke(ACCENT);
+        ring.setStrokeWidth(2.5);
+        o.getChildren().add(ring);
+        var pulse = new ScaleTransition(Duration.millis(220), ring);
+        pulse.setFromX(1.15);
+        pulse.setFromY(1.4);
+        pulse.setToX(1);
+        pulse.setToY(1);
+        pulse.play();
+        fadeOut(ring, hold());
+        log(o, action);
     }
 
     /** Logs {@code action} in the main window, for actions with no control to ring. */
