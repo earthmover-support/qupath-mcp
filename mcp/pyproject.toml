@@ -1,0 +1,6 @@
+[project]
+name = "qupath-mcp"
+version = "0.1.0"
+description = "MCP server that drives a running QuPath through the qupath-gui-driver extension"
+requires-python = ">=3.10"
+dependencies = ["mcp>=1.2,<2"]
