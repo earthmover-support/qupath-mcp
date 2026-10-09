@@ -1,10 +1,6 @@
 # qupath-mcp
 
-Drive QuPath's GUI from an AI agent. A QuPath 0.7 extension runs an MCP server inside QuPath, which Claude Code or any other MCP client connects to. Below, Claude Code counts the cells in a pathologist's tumour outline, starting from an empty QuPath ([what it did](#what-the-video-shows)).
-
-<video controls muted playsinline preload="metadata" poster="assets/tumor-091-cell-count.jpg" style="display: block; margin: 0 auto; width: auto; max-width: 100%; max-height: calc(100vh - 300px)">
-  <source src="assets/tumor-091-cell-count.mp4" type="video/mp4">
-</video>
+Drive QuPath's GUI from an AI agent. A QuPath 0.7 extension runs an MCP server inside QuPath, which Claude Code or any other MCP client connects to.
 
 ## Install
 
@@ -20,18 +16,6 @@ Details, including building from source, are in [Install](install.md).
 
 !!! warning
     The MCP server lets the connected agent run any code in QuPath, as you, with access to your files. Give it only as much trust as you give your coding agent. It is on whenever the jar is installed and any program on this computer can reach it; turn it off with **Extensions ▸ MCP server**. See [Security](security.md).
-
-## What the video shows
-
-Claude Code, from an empty QuPath, given the prompt in the strip at the bottom. It opens a lymph-node slide, answers
-**Set image type**, imports the pathologists' tumour outlines that sit beside the slide, finds the largest in the
-annotation measurement table, runs **Cell detection** inside it with QuPath's defaults, and reports the count.
-[Paced mode](tools.md#watching-the-agent) shows each action as it happens.
-
-QuPath has no importer for the outlines' ASAP XML format, so that one step runs a short Groovy script through
-`qupath_run_groovy`; everything else goes through the GUI tools. The slide is `tumor_091` from
-[CAMELYON16](https://camelyon16.grand-challenge.org/) (CC0). The video is recorded inside QuPath, so its dialogs are drawn
-where they opened on screen.
 
 ## Why
 
