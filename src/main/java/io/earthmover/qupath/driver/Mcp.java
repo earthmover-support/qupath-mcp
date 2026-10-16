@@ -60,7 +60,7 @@ class Mcp {
                 tool("qupath_menu", """
                         Fire a menu item such as "File>Open..." or "Analyze>Cell detection>Cell detection" without blocking.
 
-                        A check menu item is toggled, as a click would (so "Extensions>MCP server" turns this server off, after \
+                        A check menu item is toggled, as a click would (so "Extensions>MCP server>Enabled" turns this server off, after \
                         replying; turn it back on from QuPath's menu). Waits about a second and returns the open windows, one per \
                         line, then the description of each window the item opened, or "No new window opened." File choosers are \
                         native dialogs the tools cannot see: if the UI stops responding, that is reported. \
@@ -226,7 +226,7 @@ Both results end with "Opened while waiting:" and the outline of any window that
                         "mark" (default) rings each control you act on and lists recent actions in the window's corner, \
                         without slowing you down. "paced" also glides a pointer to each target and waits `delay_ms` before \
                         acting, for recordings or when the person wants to follow along. "off" shows nothing. The person can \
-                        change it under Extensions > Show agent actions; it persists.""",
+                        change it under Extensions > MCP server > Show agent actions; it persists.""",
                         """
                         {"mode":{"description":"off, mark or paced; omit to keep","type":"string","enum":["off","mark","paced"]},"delay_ms":{"description":"Pause before each action in paced mode, in milliseconds; omit to keep","type":"integer","minimum":0,"maximum":5000}}""",
                         null, a -> {

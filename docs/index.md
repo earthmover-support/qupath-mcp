@@ -15,7 +15,7 @@ Drive QuPath's GUI from an AI agent. A QuPath 0.7 extension runs an MCP server i
 Details, including building from source, are in [Install](install.md).
 
 !!! warning
-    The MCP server lets the connected agent run any code in QuPath, as you, with access to your files. Give it only as much trust as you give your coding agent. It is on whenever the jar is installed and any program on this computer can reach it; turn it off with **Extensions ▸ MCP server**. See [Security](security.md).
+    The MCP server lets the connected agent run any code in QuPath, as you, with access to your files. Give it only as much trust as you give your coding agent. It is on whenever the jar is installed and any program on this computer can reach it; turn it off with **Extensions ▸ MCP server ▸ Enabled**. See [Security](security.md).
 
 ## Why
 

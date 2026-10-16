@@ -7,7 +7,7 @@ Tools that act on the GUI (`qupath_menu`, `qupath_click`, `qupath_select`, `qupa
 | Tool | Use it to… | Returns |
 |---|---|---|
 | `qupath_run_groovy(code, timeout_s=60)` | do anything the dedicated tools don't cover | Captured `println` output, then `result: …` |
-| `qupath_menu(path)` | fire a menu item such as `File>Open URI...`; a check item such as `Extensions>MCP server` is toggled | The action result |
+| `qupath_menu(path)` | fire a menu item such as `File>Open URI...`; a check item such as `Extensions>MCP server>Enabled` is toggled | The action result |
 | `qupath_click(text, window=None, button="left", double=False)` | press a button, tick a checkbox or click a label or cell; `button="right"` opens a context menu and returns its items, to click next | The action result |
 | `qupath_select(text, window=None, control=None, check=None)` | pick an item in a combo box, choice box, list, tree, tab pane or table row; with `check=True` or `False`, tick or clear the checkbox of every matching table row | `selected "X" in ComboBox`, then the action result |
 | `qupath_set(value, control, window=None)` | set a spinner, slider, checkbox (`true`/`false`) or text field | `set Spinner Size: to 7`, then the action result |
@@ -37,7 +37,7 @@ QuPath shows the person at the screen what the agent does, in one of three modes
 | **Paced** | The same, and before each action a pointer moves to the control, or the menu path, key or viewer position shows at the top of the window. For a row in a list, tree or table, the pointer moves once the selection has scrolled the row into view. `qupath_view` pans and zooms to the new view over the delay instead of jumping. | Waits the paced delay (default 1000 ms) before each action. |
 | **Off** | Nothing. | None. |
 
-Paced suits screen recordings and anyone following along. The person sets the mode under **Extensions ▸ Show agent actions** and the delay with the *Paced delay (ms)* preference; the agent sets both with `qupath_show_actions`. Both persist across restarts.
+Paced suits screen recordings and anyone following along. The person sets the mode under **Extensions ▸ MCP server ▸ Show agent actions** and the delay with the *Paced delay (ms)* preference; the agent sets both with `qupath_show_actions`. Both persist across restarts.
 
 The marks are drawn only in QuPath's windows: a menu in the macOS menu bar can't be opened from code, so paced mode shows its path instead. `qupath_screenshot`, `qupath_describe` and click lookups leave the marks out, so the agent sees QuPath as it is.
 
@@ -56,5 +56,5 @@ The marks are drawn only in QuPath's windows: a menu in the macOS menu bar can't
 - **`qupath_open`.** It waits up to 5 s for QuPath to open the image. If a prompt (for example about unsaved changes) is holding it, the reply says `still opening` and the action result shows the prompt.
 - **`qupath_describe` with no window.** It describes every open window except the main one, then gives the main window's title, the viewer's image path, downsample, centre, z/t and annotation count. The downsample is image pixels per screen pixel; 1 is full resolution.
 - **File choosers are native.** QuPath's open and save dialogs are macOS dialogs that the scene graph does not contain, so no tool can read or drive them. When an action leaves QuPath's UI thread unresponsive for two seconds, the tool says a native dialog is probably open instead of a window list; close it in QuPath. Avoid them: `qupath_open` opens an image by path or URI, `File>Open URI...` is a normal dialog, and `qupath_run_groovy` can set any path.
-- **Turning the server off.** `qupath_menu("Extensions>MCP server")` toggles the preference like a click, so an agent can switch the server off. The call replies first and the server then stops within a few seconds, ending the session; it has to be turned back on from QuPath's Extensions menu.
+- **Turning the server off.** `qupath_menu("Extensions>MCP server>Enabled")` toggles the preference like a click, so an agent can switch the server off. The call replies first and the server then stops within a few seconds, ending the session; it has to be turned back on from QuPath's Extensions menu.
 - **`qupath_quit`.** It returns `quit requested` and then exits QuPath after a short delay.

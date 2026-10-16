@@ -12,11 +12,11 @@ Drive QuPath's GUI from an AI agent. QuPath's own scripting reaches the data mod
 claude mcp add -s user --transport http qupath http://127.0.0.1:51515/mcp
 ```
 
-`-s user` makes it available in every project; without it the server is registered for the current project only. Other clients take the URL `http://127.0.0.1:51515/mcp`; [Install](https://earthmover-support.github.io/qupath-mcp/install/) has the config for Codex, Cursor, VS Code and Gemini CLI. QuPath must be running before the client connects. QuPath logs `MCP server on http://127.0.0.1:51515/mcp` when the server starts, and **Extensions ▸ MCP server** turns it off and on.
+`-s user` makes it available in every project; without it the server is registered for the current project only. Other clients take the URL `http://127.0.0.1:51515/mcp`; [Install](https://earthmover-support.github.io/qupath-mcp/install/) has the config for Codex, Cursor, VS Code and Gemini CLI. QuPath must be running before the client connects. QuPath logs `MCP server on http://127.0.0.1:51515/mcp` when the server starts, and **Extensions ▸ MCP server ▸ Enabled** turns it off and on.
 
 Tested on macOS arm64 with QuPath 0.7.0 only.
 
-**The MCP server lets the connected agent run any code in QuPath, as you, with access to your files.** Give it only as much trust as you give your coding agent. It is on whenever the jar is installed and any program on this computer can reach it (web pages cannot), so don't install it on a shared machine, and turn it off with Extensions ▸ MCP server when you're not using it. See [Security](https://earthmover-support.github.io/qupath-mcp/security/).
+**The MCP server lets the connected agent run any code in QuPath, as you, with access to your files.** Give it only as much trust as you give your coding agent. It is on whenever the jar is installed and any program on this computer can reach it (web pages cannot), so don't install it on a shared machine, and turn it off with Extensions ▸ MCP server ▸ Enabled when you're not using it. See [Security](https://earthmover-support.github.io/qupath-mcp/security/).
 
 Documentation, with a video of Claude Code opening a slide and counting cells in a tumour outline:
 <https://earthmover-support.github.io/qupath-mcp/>
