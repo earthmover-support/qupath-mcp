@@ -10,7 +10,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.WeakHashMap;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -24,6 +23,7 @@ import io.modelcontextprotocol.spec.McpSchema.Content;
 import io.modelcontextprotocol.spec.McpSchema.ImageContent;
 import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import io.modelcontextprotocol.spec.McpStreamableServerTransportProvider;
+import javafx.stage.Stage;
 import javafx.stage.Window;
 
 /**
@@ -43,7 +43,13 @@ class Mcp {
     private final GuiDriver driver;
     private final DriverServer server;
     private final List<SyncToolSpecification> tools;
-    private final Map<String, Seen> sessions = new ConcurrentHashMap<>();
+    /** The most recent sessions' windows; an older session that calls again starts afresh, as on its first call. */
+    private final Map<String, Seen> sessions = Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Seen> eldest) {
+            return size() > 32;
+        }
+    });
 
     Mcp(GuiDriver driver, DriverServer server) {
         this.driver = driver;
@@ -178,7 +184,7 @@ Both results end with "Opened while waiting:" and the outline of any window that
                             var before = driver.windowsNow();
                             while (true) {
                                 // Matched against every row, so an item far down a long table counts once it is there.
-                                var all = driver.outline(str(a, "window"), 0, GuiDriver.ALL);
+                                var all = driver.outline(str(a, "window"), 0, GuiDriver.ALL, false);
                                 boolean done = all.contains(text) != gone;
                                 if (done || System.nanoTime() >= deadline) {
                                     var opened = driver.openedSince(before);
@@ -319,18 +325,23 @@ Both results end with "Opened while waiting:" and the outline of any window that
                     var client = exchange.getClientInfo();
                     var who = client == null ? null : client.title() != null ? client.title() : client.name();
                     driver.indicator.busy(true, who);
-                    var entry = driver.actions.begin("mcp", who, name, request.arguments());
+                    var args = request.arguments() == null ? Map.<String, Object>of() : request.arguments();
+                    var entry = driver.actions.begin("mcp", who, name, args);
                     var seen = sessions.computeIfAbsent(Objects.requireNonNullElse(exchange.sessionId(), ""), k -> new Seen());
                     var changes = changes(seen);
                     var outlined = new HashSet<Window>();
+                    var listed = new boolean[1];
                     driver.outlined.set(outlined);
+                    driver.listed.set(listed);
                     try {
                         // Clients that load tool schemas lazily may call without arguments; say what's needed.
                         if (required != null)
                             for (var r : required.split(","))
-                                if (request.arguments() == null || request.arguments().get(r) == null)
+                                if (args.get(r) == null)
                                     throw new IllegalArgumentException("%s needs `%s`; see its input schema.".formatted(name, r));
-                        var content = prepend(notice(changes, outlined), handler.call(request.arguments()));
+                        // The notice leaves out what the result outlines, so it is built once the handler has run.
+                        var result = handler.call(args);
+                        var content = prepend(notice(changes, outlined), result);
                         entry.done(summary(content));
                         var warning = driver.actions.takeWarning();
                         if (warning != null)
@@ -344,7 +355,8 @@ Both results end with "Opened while waiting:" and the outline of any window that
                         return CallToolResult.builder().addTextContent(message).isError(true).build();
                     } finally {
                         driver.outlined.remove();
-                        settle(seen, outlined);
+                        driver.listed.remove();
+                        settle(seen, outlined, listed[0]);
                         driver.indicator.busy(false, null);
                     }
                 }).build();
@@ -368,12 +380,15 @@ Both results end with "Opened while waiting:" and the outline of any window that
      * thread is busy, so this never holds up a call; the change is then reported by a later one.
      */
     private Changes changes(Seen seen) {
-        List<Window> known;
-        boolean primed;
+        // Held across the FX round trip so that two calls made at once do not both report one change.
         synchronized (seen) {
-            known = new ArrayList<>(seen.windows);
-            primed = seen.primed;
+            return changesLocked(seen);
         }
+    }
+
+    private Changes changesLocked(Seen seen) {
+        var known = new ArrayList<>(seen.windows);
+        boolean primed = seen.primed;
         try {
             var now = driver.fxWithin(300, () -> {
                 var showing = GuiDriver.showingStages();
@@ -386,29 +401,34 @@ Both results end with "Opened while waiting:" and the outline of any window that
             });
             if (now == null)
                 return null;
-            synchronized (seen) {
-                seen.windows.clear();
-                seen.windows.addAll(now.getKey());
-                seen.primed = true;
-            }
+            seen.windows.clear();
+            seen.windows.addAll(now.getKey());
+            seen.primed = true;
             return primed ? now.getValue() : null;
         } catch (Exception e) {
             return null;
         }
     }
 
-    /** Records what the agent now knows: the windows this call outlined, less any that have closed. */
-    private void settle(Seen seen, Set<Window> outlined) {
-        List<Window> showing;
-        try {
-            showing = driver.fxWithin(300, GuiDriver::showingStages);
-        } catch (Exception e) {
-            showing = null;
+    /**
+     * Records what the agent now knows: the windows this call outlined and, when its result listed the open windows,
+     * that the others in that list are all that is open. Without a list, a window that closed during the call is kept,
+     * so the next call reports it.
+     */
+    private void settle(Seen seen, Set<Window> outlined, boolean listed) {
+        List<Window> showing = null;
+        if (listed) {
+            try {
+                showing = driver.fxWithin(300, GuiDriver::showingStages);
+            } catch (Exception e) {
+                showing = null;
+            }
         }
         synchronized (seen) {
             if (!seen.primed)
                 return;
-            seen.windows.addAll(outlined);
+            // Only stages: a context menu or tooltip the result outlined is not tracked, so it is not reported closed.
+            outlined.stream().filter(Stage.class::isInstance).forEach(seen.windows::add);
             if (showing != null)
                 seen.windows.retainAll(showing);
         }

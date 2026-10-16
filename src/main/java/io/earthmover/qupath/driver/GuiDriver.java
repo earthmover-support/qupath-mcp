@@ -88,6 +88,9 @@ public class GuiDriver {
     /** Windows whose outline the current MCP tool call has put in its result; set by Mcp for the length of a call. */
     final ThreadLocal<Set<Window>> outlined = new ThreadLocal<>();
 
+    /** Whether the current MCP tool call's result lists the open windows; set by Mcp for the length of a call. */
+    final ThreadLocal<boolean[]> listed = new ThreadLocal<>();
+
     GuiDriver(QuPathGUI qupath, String outDir) {
         this.qupath = qupath;
         this.outDir = new File(outDir);
@@ -231,6 +234,14 @@ public class GuiDriver {
      * but the main one, followed by a summary of the main window and viewer. Rows of tables, lists and trees are paged.
      */
     String outline(String titleSubstring, int offset, int limit) throws Exception {
+        return outline(titleSubstring, offset, limit, true);
+    }
+
+    /**
+     * {@link #outline(String, int, int)}, noting the windows as shown in the call's result only when {@code note}: a
+     * search such as qupath_wait's reads outlines it does not return.
+     */
+    String outline(String titleSubstring, int offset, int limit, boolean note) throws Exception {
         if (!responsive())
             throw new IllegalStateException(NATIVE_DIALOG);
         var described = new ArrayList<Window>();
@@ -255,7 +266,8 @@ public class GuiDriver {
                     viewer.getZPosition(), viewer.getTPosition(),
                     data == null ? null : data.getHierarchy().getAnnotationObjects().size())).toString().strip();
         });
-        noteOutlined(described);
+        if (note)
+            noteOutlined(described);
         return out;
     }
 
@@ -322,7 +334,7 @@ public class GuiDriver {
         var line = "Opened since your last call: \"%s\" — %.0fx%.0f".formatted(titleOf(w), w.getWidth(), w.getHeight());
         try {
             var outline = describe(w).strip().lines().skip(1).toList();
-            return outline.size() > 10 ? line + "; see qupath_describe"
+            return outline.size() > 10 ? line + "; qupath_describe window=\"%s\"".formatted(titleOf(w))
                     : outline.stream().map(l -> "\n  " + l).collect(Collectors.joining("", line, ""));
         } catch (Exception e) {
             return line;
@@ -363,6 +375,9 @@ public class GuiDriver {
 
     /** One line per showing window: title, size and whether it has focus. */
     String windowsText() throws Exception {
+        var flag = listed.get();
+        if (flag != null)
+            flag[0] = true;
         return fx(() -> Window.getWindows().stream().filter(Window::isShowing)
                 .map(w -> "%s — %.0fx%.0f%s".formatted(titleOf(w), w.getWidth(), w.getHeight(), w.isFocused() ? " (focused)" : ""))
                 .collect(Collectors.joining("\n")));
