@@ -72,9 +72,9 @@ class Mcp {
                             return null;
                         }))),
                 tool("qupath_click", """
-                        Click the button, checkbox or other labeled node (label, table or tree cell) whose text is exactly `text`, \
-                        without blocking (safe for buttons that open modal dialogs). If no text matches, the tooltip (whole, \
-                        then first line) or accessible text is tried, which is how an icon-only button is named; `text` may \
+                        Click the button, checkbox or other labeled node (label, table or tree cell; a titled pane is \
+                        expanded or collapsed) whose text is exactly `text`, without blocking (safe for buttons that open \
+                        modal dialogs). If no text matches, the tooltip (whole, then first line) or accessible text is tried, which is how an icon-only button is named; `text` may \
                         also be the `#n` that qupath_describe shows for a control. When several controls match, the error \
                         lists them with their #n and the nearest label before each; click one by its #n.
 
@@ -87,11 +87,8 @@ class Mcp {
                         {"text":{"description":"Exact text, tooltip text or #n (from qupath_describe) of the button, checkbox, label or menu item to click","type":"string"},"window":{"description":"Title substring of the target window; omit for the focused dialog (else the main window)","type":"string"},\
                         "button":{"description":"left, or right to open a context menu","type":"string","enum":["left","right"],"default":"left"},"double":{"description":"Double-click","type":"boolean","default":false}}""",
                         "text",
-                        a -> text(driver.act(() -> {
-                            driver.click(driver.lookup(driver.window(str(a, "window")), str(a, "text")),
-                                    "right".equals(a.get("button")), Boolean.TRUE.equals(a.get("double")));
-                            return null;
-                        }))),
+                        a -> text(driver.act(() -> driver.click(driver.lookup(driver.window(str(a, "window")), str(a, "text")),
+                                "right".equals(a.get("button")), Boolean.TRUE.equals(a.get("double")))))),
                 tool("qupath_type", """
                         Set the text of the `field`-th (0-based) text field in a window; `window` defaults as in qupath_click.
 
@@ -266,7 +263,8 @@ Both results end with "Opened while waiting:" and the outline of any window that
             tabs, tables, lists, trees.
 
             Use this before qupath_screenshot to read a dialog's state as text. Controls that qupath_select and qupath_set \
-            can address carry a `#n` tag, and a label is shown on the control it names. `control` returns only that \
+            can address carry a `#n` tag, and a label is shown on the control it names. A TitledPane marked \
+            [collapsed] hides its controls until qupath_click expands it. `control` returns only that \
             control's lines. Every control is listed; `limit` pages only the rows of tables, lists and trees: `limit` rows \
             (default 20) from `offset`, ending with "rows X–Y of N"; ask for the next page with offset=Y. `window` is a title substring and \
             describes every open window it matches, each headed by its index (a popup can share its dialog's title). \
