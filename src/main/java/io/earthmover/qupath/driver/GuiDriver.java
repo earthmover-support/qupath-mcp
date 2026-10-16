@@ -775,7 +775,7 @@ public class GuiDriver {
         return shown(target, result);
     }
 
-    /** The showing stage whose title contains {@code titleSubstring}; if null, an open context menu, else the focused or topmost non-main stage, else the main one. */
+    /** The showing stage whose title contains {@code titleSubstring}; if null, an open context menu, else the focused or latest non-main stage, else the main one. */
     public Window window(String titleSubstring) throws Exception {
         if (!responsive())
             throw new IllegalStateException(NATIVE_DIALOG);

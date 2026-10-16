@@ -35,7 +35,7 @@ class Mcp {
     private static final String INSTRUCTIONS = "Drives the QuPath GUI and runs Groovy in it. Read windows as text with "
             + "qupath_describe before taking screenshots. The GUI actions (qupath_menu, qupath_click, qupath_select, "
             + "qupath_set, qupath_key, qupath_close, qupath_open) return without waiting for event handlers, so a modal "
-            + "dialog cannot block them. About a second later each returns its action result: the open windows and the "
+            + "dialog cannot block them. About a second later (qupath_open waits for the image first) each returns its action result: the open windows and the "
             + "outline of each window the action opened, a large one cut short. A result can start with windows that "
             + "opened or closed since your last call, such as a late dialog.";
 
@@ -91,8 +91,8 @@ class Mcp {
                 tool("qupath_click", """
                         Click the button, checkbox, label, or table or tree cell whose text is exactly `text`, else whose \
                         tooltip (or its first line) or accessible text is, which names icon-only buttons; a titled pane is \
-                        expanded or collapsed. `text` may instead be a control's #n from qupath_describe; when several controls \
-                        match, the error lists them by #n. Returns the action result (the open windows and any window the click \
+                        expanded or collapsed. `text` may instead be a control's #n from qupath_describe; when several tooltips \
+                        match, the error lists them by #n, and text that repeats is clicked by #n. Returns the action result (the open windows and any window the click \
                         opened), so an error popup's text comes back directly.""",
                         """
                         {"text":{"description":"Exact text, tooltip or #n from qupath_describe","type":"string"},"window":{"description":"Title substring; default: context menu, else focused or latest dialog, else main window","type":"string"},\
@@ -101,8 +101,8 @@ class Mcp {
                         a -> text(driver.act(() -> driver.click(driver.lookup(driver.window(str(a, "window")), str(a, "text")),
                                 "right".equals(a.get("button")), Boolean.TRUE.equals(a.get("double")))))),
                 tool("qupath_type", """
-                        Set the text of the `field`-th (0-based) text field in a window, in the order qupath_describe lists \
-                        them, and return the field's text.""",
+                        Set the text of the `field`-th (0-based) text input in a window, counting the editors inside \
+                        spinners and combo boxes, and return the field's text. qupath_set fills a text field by #n.""",
                         """
                         {"text":{"description":"Replaces the field's content","type":"string"},"window":{"description":"Title substring; default: context menu, else focused or latest dialog, else main window","type":"string"},"field":{"description":"Which text field, 0 = first in the window","type":"integer","default":0}}""", "text", a -> {
                             var window = driver.window(str(a, "window"));
@@ -114,7 +114,7 @@ class Mcp {
                         Select the item named `text` in a combo box, choice box, list, tree (parents are expanded; QuPath's \
                         project image list is one), tab pane or table row (any cell with that text).
 
-                        `control` narrows the search to one control. With `check` true or false, a table's matching rows (all of them) get their checkbox ticked or cleared \
+                        `control` narrows the search to the controls it names. With `check` true or false, a table's matching rows (all of them) get their checkbox ticked or cleared \
                         instead. Returns the control's qupath_describe line, then the action result.""",
                         """
                         {"text":{"description":"Text of the item, tab or table row to select","type":"string"},"window":{"description":"Title substring; default: context menu, else focused or latest dialog, else main window","type":"string"},"control":{"description":"Its #n from qupath_describe, or the label next to it","type":"string"},"check":{"description":"For table rows with a checkbox column: true ticks, false clears every matching row","type":"boolean"}}""",
@@ -151,7 +151,7 @@ class Mcp {
                         {"path_or_uri":{"description":"Image file path or URI to open in the viewer","type":"string"}}""", "path_or_uri",
                         a -> text(driver.act(() -> driver.open(str(a, "path_or_uri"))))),
                 tool("qupath_describe", DESCRIBE, """
-                        {"window":{"description":"Title substring; omit to describe every open window plus a main-window summary","type":"string"},"control":{"description":"Only this control: its #n or the label next to it, found as qupath_set finds it (window defaults to the focused dialog)","type":"string"},"offset":{"description":"First row to list in tables, lists and trees","type":"integer","default":0},"limit":{"description":"Rows to list per table, list or tree; every control is always listed","type":"integer","default":20}}""",
+                        {"window":{"description":"Title substring; omit to describe every open window plus a main-window summary","type":"string"},"control":{"description":"Only this control: its #n or the label next to it, found as qupath_set finds it","type":"string"},"offset":{"description":"First row to list in tables, lists and trees","type":"integer","default":0},"limit":{"description":"Rows to list per table, list or tree; every control is always listed","type":"integer","default":20}}""",
                         null, a -> text(a.get("control") != null
                                 ? driver.describe(driver.window(str(a, "window")), str(a, "control"), (int) num(a, "offset", 0), (int) num(a, "limit", 20))
                                 : describe(str(a, "window"), (int) num(a, "offset", 0), (int) num(a, "limit", 20)))),
@@ -224,7 +224,8 @@ class Mcp {
                 tool("qupath_show_actions", """
                         Set how qupath-mcp shows the person watching what you do, and return the setting. "mark" (default) \
                         rings each control you act on, without slowing you down; "paced" also moves a pointer to it and \
-                        waits `delay_ms` first, for when the person wants to follow along; "off" shows nothing.""",
+                        waits `delay_ms` first, for when the person wants to follow along; "off" shows nothing. The setting \
+                        persists across restarts; tell the person if you change it.""",
                         """
                         {"mode":{"description":"Omit to keep","type":"string","enum":["off","mark","paced"]},"delay_ms":{"description":"Pause before each paced action; omit to keep","type":"integer","minimum":0,"maximum":5000}}""",
                         null, a -> {
