@@ -441,8 +441,9 @@ public class GuiDriver {
 
     /**
      * Finds the node to click: a {@code #n} from describe, else the first labeled node whose text equals {@code text}, else
-     * the one whose tooltip (whole, then first line) or accessible text equals it. Several tooltip or accessible-text
-     * matches are an error that lists them, since icon-only buttons repeat one tooltip per row.
+     * the one whose tooltip (whole, then first line) or accessible text equals it, else the one whose bracketed name, as
+     * describe and errors print it, equals it. Several matches past the first tier are an error that lists them, since
+     * icon-only buttons repeat one tooltip per row.
      */
     public Node lookup(Window window, String text) throws Exception {
         var found = fx(() -> {
@@ -456,7 +457,7 @@ public class GuiDriver {
             findAll(window.getScene().getRoot(), Labeled.class, labeled);
             var tiers = List.<java.util.function.Predicate<Labeled>>of(l -> text.equals(l.getText()),
                     l -> text.equals(tooltipText(l)), l -> text.equals(firstLine(tooltipText(l))),
-                    l -> text.equals(l.getAccessibleText()));
+                    l -> text.equals(l.getAccessibleText()), l -> text.equals(name(l)));
             var all = controls(window, null);
             for (int i = 0; i < tiers.size(); i++) {
                 var tier = tiers.get(i);
