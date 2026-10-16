@@ -520,7 +520,7 @@ public class GuiDriver {
             if (text.strip().matches("#\\d+")) {
                 var n = controls(window, text);
                 if (n.isEmpty())
-                    throw new IllegalStateException("No control " + text + "; qupath_describe shows each as #n");
+                    throw new IllegalStateException("No control " + text + "; qupath_describe shows each as #n" + collapsed(window));
                 return n.get(0);
             }
             var labeled = new ArrayList<Labeled>();
@@ -801,7 +801,7 @@ public class GuiDriver {
      */
     public String close(Window window) throws Exception {
         if (window == qupath.getStage())
-            throw new IllegalArgumentException("Won't close QuPath's main window; use qupath_quit");
+            throw new IllegalArgumentException("Won't close QuPath's main window");
         var title = titleOf(window);
         logger.info("close {}", title);
         var action = "close “" + title + "”";
@@ -876,8 +876,8 @@ public class GuiDriver {
         return fx(() -> {
             var matches = controls(window, control);
             if (matches.isEmpty())
-                throw new IllegalStateException("No control '%s' in '%s'; qupath_describe shows each as #n".formatted(
-                        control, titleOf(window)));
+                throw new IllegalStateException("No control '%s' in '%s'; qupath_describe shows each as #n%s".formatted(
+                        control, titleOf(window), collapsed(window)));
             var page = new Page(new StringBuilder(), offset, limit);
             describe(window.getScene().getRoot(), 0, page);
             return matches.stream().map(n -> {
@@ -934,6 +934,14 @@ public class GuiDriver {
     }
 
     /** Visible nodes only, as {@code describe} lists them, so a hidden control can't be matched or shift field numbers. */
+    /** A hint for a control that wasn't found, when collapsed titled panes in the window may be hiding it. */
+    private static String collapsed(Window window) {
+        var panes = new ArrayList<TitledPane>();
+        findAll(window.getScene().getRoot(), TitledPane.class, panes);
+        var names = panes.stream().filter(tp -> tp.isCollapsible() && !tp.isExpanded()).map(TitledPane::getText).toList();
+        return names.isEmpty() ? "" : ", or it may be in a collapsed pane: " + String.join(", ", names);
+    }
+
     private static <T extends Node> void findAll(Node node, Class<T> type, List<T> into) {
         if (!node.isVisible() || Indicator.isOverlay(node))
             return;
@@ -1300,7 +1308,7 @@ public class GuiDriver {
         var change = fx(() -> {
             var matches = controls(window, control);
             if (matches.isEmpty())
-                throw new IllegalStateException("No control '%s'; qupath_describe shows each as #n".formatted(control));
+                throw new IllegalStateException("No control '%s'; qupath_describe shows each as #n%s".formatted(control, collapsed(window)));
             var node = matches.get(0);
             Runnable apply;
             if (node instanceof Spinner<?> sp) {
