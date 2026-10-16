@@ -558,11 +558,14 @@ public class GuiDriver {
     }
 
     /**
-     * Buttons are fired; any other node, or a right or double click, gets synthetic mouse events (a context menu
-     * request for the right button), because a cell or label has no action to fire.
+     * Buttons are fired and a titled pane is expanded or collapsed; any other node, or a right or double click, gets
+     * synthetic mouse events (a context menu request for the right button), because a cell or label has no action to
+     * fire. Returns what a titled pane did, else null.
      */
-    public void click(Node node, boolean right, boolean doubleClick) {
+    public String click(Node node, boolean right, boolean doubleClick) {
         logger.info("click {} right={} double={}", node, right, doubleClick);
+        if (node instanceof TitledPane tp && tp.isCollapsible() && !right && !doubleClick)
+            return toggle(tp);
         var action = (right ? "right-click" : doubleClick ? "double-click" : "click")
                 + (node instanceof Labeled l ? " “" + name(l) + "”" : "");
         ActionLog.target(node, action);
@@ -588,6 +591,23 @@ public class GuiDriver {
                             false, true, null));
         });
         indicator.mark(node, action);
+        return null;
+    }
+
+    /**
+     * Mouse events sent to the pane itself miss its title bar, which is what handles a click, so the pane is expanded
+     * directly. In an accordion, expanding one pane collapses the others, as a click would.
+     */
+    private String toggle(TitledPane tp) {
+        boolean expand = !tp.isExpanded();
+        var action = (expand ? "expand" : "collapse") + " “" + tp.getText() + "”";
+        var title = tp.lookup(".title") != null ? tp.lookup(".title") : tp;
+        ActionLog.target(tp, action);
+        indicator.before(title, action);
+        Platform.runLater(() -> tp.setExpanded(expand));
+        indicator.mark(title, action);
+        return expand ? "expanded TitledPane “%s”; qupath_describe lists its controls".formatted(tp.getText())
+                : "collapsed TitledPane “%s”".formatted(tp.getText());
     }
 
     /** Finds a menu item by a path such as {@code Help>About}. */
@@ -942,7 +962,8 @@ public class GuiDriver {
         }
         if (node instanceof Labeled l && l.getText() != null && !l.getText().isBlank() && !"Glyph".equals(l.getClass().getSimpleName())) {
             page.labelStart = sb.length();
-            sb.append("  ".repeat(depth)).append("%s \"%s\"".formatted(l.getClass().getSimpleName(), l.getText())).append('\n');
+            sb.append("  ".repeat(depth)).append("%s \"%s\"%s".formatted(l.getClass().getSimpleName(), l.getText(),
+                    l instanceof TitledPane tp && tp.isCollapsible() && !tp.isExpanded() ? " [collapsed]" : "")).append('\n');
             page.labelEnd = sb.length();
             page.label = l;
             depth++;
