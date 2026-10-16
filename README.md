@@ -12,7 +12,7 @@ Drive QuPath's GUI from an AI agent. QuPath's own scripting reaches the data mod
 claude mcp add -s user --transport http qupath http://127.0.0.1:51515/mcp
 ```
 
-`-s user` makes it available in every project; without it the server is registered for the current project only. Other clients take the URL `http://127.0.0.1:51515/mcp`; [Install](https://earthmover-support.github.io/qupath-mcp/install/) has the config for Codex, Cursor, VS Code and Gemini CLI. QuPath must be running before the client connects. QuPath logs `MCP server on http://127.0.0.1:51515/mcp` when the server starts, and **Extensions ▸ MCP server ▸ Enabled** turns it off and on.
+`-s user` makes it available in every project; without it the server is registered for the current project only. Other clients take the URL `http://127.0.0.1:51515/mcp`; [Install](https://earthmover-support.github.io/qupath-mcp/install/) has the config for Codex, Cursor, VS Code and Gemini CLI. QuPath must be running before the client connects. QuPath's log shows `MCP server on http://127.0.0.1:51515/mcp` when the server starts, and **Extensions ▸ MCP server ▸ Enabled** turns it off and on.
 
 Tested on macOS arm64 with QuPath 0.7.0 only.
 
