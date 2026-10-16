@@ -548,8 +548,9 @@ public class GuiDriver {
             // Only the buttons describe tags, since those are the ones a tooltip or bracketed name reaches.
             var buttons = fx(() -> controls(window, null).stream().filter(ButtonBase.class::isInstance)
                     .map(n -> name((ButtonBase) n)).filter(t -> !t.isBlank() && !"(icon)".equals(t)).distinct().limit(MAX_ROWS).toList());
-            throw new IllegalStateException("No button '%s' in '%s'. Buttons: %s".formatted(text, titleOf(window),
-                    String.join(", ", buttons)));
+            var hint = fx(() -> collapsed(window));
+            throw new IllegalStateException("No button '%s' in '%s'. Buttons: %s%s".formatted(text, titleOf(window),
+                    String.join(", ", buttons), hint));
         }
         return found;
     }
@@ -933,15 +934,20 @@ public class GuiDriver {
         return null;
     }
 
-    /** Visible nodes only, as {@code describe} lists them, so a hidden control can't be matched or shift field numbers. */
-    /** A hint for a control that wasn't found, when collapsed titled panes in the window may be hiding it. */
+    /** A hint for a control that wasn't found, when collapsed titled panes in the window may be hiding it. Call on the FX thread. */
     private static String collapsed(Window window) {
         var panes = new ArrayList<TitledPane>();
         findAll(window.getScene().getRoot(), TitledPane.class, panes);
-        var names = panes.stream().filter(tp -> tp.isCollapsible() && !tp.isExpanded()).map(TitledPane::getText).toList();
-        return names.isEmpty() ? "" : ", or it may be in a collapsed pane: " + String.join(", ", names);
+        var names = panes.stream().filter(tp -> tp.isCollapsible() && !tp.isExpanded() && tp.getText() != null)
+                .map(TitledPane::getText).toList();
+        if (names.isEmpty())
+            return "";
+        var shown = String.join(", ", names.subList(0, Math.min(names.size(), MAX_ROWS)));
+        return ", or it may be in a collapsed pane: " + shown
+                + (names.size() > MAX_ROWS ? " (+%d more)".formatted(names.size() - MAX_ROWS) : "");
     }
 
+    /** Visible nodes only, as {@code describe} lists them, so a hidden control can't be matched or shift field numbers. */
     private static <T extends Node> void findAll(Node node, Class<T> type, List<T> into) {
         if (!node.isVisible() || Indicator.isOverlay(node))
             return;
@@ -1319,10 +1325,21 @@ public class GuiDriver {
                 double v = Double.parseDouble(value);
                 apply = () -> sl.setValue(v);
             } else if (node instanceof CheckBox cb) {
+                if (!value.equalsIgnoreCase("true") && !value.equalsIgnoreCase("false"))
+                    throw new IllegalArgumentException("A CheckBox is set to true or false, not '%s'".formatted(value));
                 boolean v = Boolean.parseBoolean(value);
                 apply = () -> cb.setSelected(v);
             } else if (node instanceof TextInputControl t) {
                 apply = () -> t.setText(value);
+            } else if (node instanceof ComboBox<?> cb && cb.isEditable()) {
+                @SuppressWarnings("unchecked") var box = (ComboBox<Object>) cb;
+                var parsed = box.getConverter() == null ? value : box.getConverter().fromString(value);
+                // Without a converter of its own a combo box parses to the string, which a box of numbers can't hold.
+                var sample = box.getValue() != null ? box.getValue() : box.getItems().isEmpty() ? null : box.getItems().get(0);
+                if (parsed != null && sample != null && !sample.getClass().isInstance(parsed))
+                    throw new IllegalArgumentException("This ComboBox holds %s, not text; use qupath_select".formatted(
+                            sample.getClass().getSimpleName()));
+                apply = () -> box.setValue(parsed);
             } else {
                 throw new IllegalStateException("%s cannot be set; use qupath_select for lists, tabs and combo boxes".formatted(
                         node.getClass().getSimpleName()));

@@ -74,7 +74,7 @@ class Mcp {
                         }),
                 tool("qupath_menu", """
                         Fire a menu item such as "Analyze>Cell detection>Cell detection"; returns the action result. A check \
-                        item is toggled ("Extensions>MCP server>Enabled" turns this server off). File>Open... opens a native \
+                        item is toggled ("Extensions>MCP server>Enabled" turns this server off until the person turns it back on). File>Open... opens a native \
                         chooser no tool can drive; use qupath_open.""",
                         """
                         {"path":{"description":"Levels separated by >","type":"string"}}""", "path",
@@ -101,7 +101,7 @@ class Mcp {
                         "text", a -> text(driver.act(() -> driver.select(driver.window(str(a, "window")), str(a, "text"),
                                 str(a, "control"), (Boolean) a.get("check"))))),
                 tool("qupath_set", """
-                        Set a spinner, slider, checkbox or text field to `value`. Returns the control's qupath_describe line \
+                        Set a spinner, slider, checkbox (true/false), text field or editable combo box to `value`. Returns the control's qupath_describe line \
                         with the value it now holds, then the action result.""",
                         """
                         {"value":{"type":["string","number","boolean"]},"control":{"description":"#n or label","type":"string"},"window":{"description":"Title substring","type":"string"}}""",
@@ -171,11 +171,11 @@ class Mcp {
                         """
                         {"window":{"description":"Title substring; omit for the main window","type":"string"},"index":{"description":"Which match, as qupath_describe numbers them","type":"integer","default":0},"max_size":{"description":"Longest side in pixels","type":"integer","default":1024},\
                         "format":{"type":"string","enum":["png","jpeg"],"default":"png"},"viewer":{"description":"Crop to the image viewer","type":"boolean","default":false},\
-                        "region":{"description":"Crop to [x, y, width, height]","type":"array","items":{"type":"number"},"minItems":4,"maxItems":4}}""", null, a -> {
+                        "region":{"description":"Crop to [x, y, width, height] in window coordinates","type":"array","items":{"type":"number"},"minItems":4,"maxItems":4}}""", null, a -> {
                             double[] region = a.get("region") instanceof List<?> r
                                     ? r.stream().mapToDouble(n -> ((Number) n).doubleValue()).toArray() : null;
                             var shot = driver.screenshot(str(a, "window"), (int) num(a, "index", 0), (int) num(a, "max_size", 1024),
-                                    "jpeg".equals(a.get("format")) ? "jpeg" : "png", num(a, "quality", 0.85),
+                                    "jpeg".equals(a.get("format")) ? "jpeg" : "png", 0.85,
                                     Boolean.TRUE.equals(a.get("viewer")), region);
                             if (shot == null)
                                 throw new Exception("No open window %d whose title contains '%s'; see qupath_describe.".formatted(
