@@ -124,6 +124,13 @@ class ActionLog {
         CURRENT.set(entry);
     }
 
+    /** Marks the running call as having entered text in a password field, so its text arguments are not written. */
+    static void secret() {
+        var entry = CURRENT.get();
+        if (entry != null)
+            entry.secret = true;
+    }
+
     static void target(Node node, String action) {
         target(node == null || node.getScene() == null ? null : node.getScene().getWindow(), action);
     }
@@ -151,6 +158,7 @@ class ActionLog {
         private final String source, client, tool;
         private final Map<String, Object> args;
         private String window;
+        private volatile boolean secret;
         private final List<String> targets = new ArrayList<>();
 
         private Entry(String source, String client, String tool, Map<String, Object> args) {
@@ -188,7 +196,7 @@ class ActionLog {
             if (client != null)
                 e.put("client", client);
             e.put("tool", tool);
-            e.put("args", args == null ? Map.of() : args);
+            e.put("args", args == null ? Map.of() : secret ? hidden(args) : args);
             synchronized (this) {
                 if (window != null)
                     e.put("window", window);
@@ -214,6 +222,14 @@ class ActionLog {
             }
             return e;
         }
+    }
+
+    /** The arguments of a call that typed into a password field, with the text it typed replaced. */
+    private static Map<String, Object> hidden(Map<String, Object> args) {
+        var copy = new LinkedHashMap<>(args);
+        for (var key : List.of("text", "value"))
+            copy.computeIfPresent(key, (k, v) -> GuiDriver.HIDDEN);
+        return copy;
     }
 
     private synchronized void append(String line) {

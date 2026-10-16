@@ -21,7 +21,7 @@ One line, from a test session:
 - `result`: the text the tool returned, cut at 4000 characters; an image is replaced by a placeholder giving its type and encoded length. A failed call has `error` instead.
 - `project` and `image`: the paths of the project and image that were open, when there were any.
 
-The log holds the Groovy the agent ran and the text it read back, which can include file paths and anything shown in a dialog. Treat the folder like the project data it describes. On macOS and Linux the extension creates the folder and its files readable by you only.
+The log holds the Groovy the agent ran and the text it read back, which can include file paths and anything shown in a dialog. Treat the folder like the project data it describes. Text typed into a password field with `qupath_type` or `qupath_set` is written as `••••••`, here and everywhere else qupath-mcp shows it; Groovy that enters or reads a password is logged as written. On macOS and Linux the extension creates the folder and its files readable by you only.
 
 The log is a record of what the agent did, not a tamper-proof audit trail: an agent that can run Groovy can also turn logging off or edit the files. The call that turns logging off is still recorded.
 

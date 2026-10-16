@@ -46,6 +46,7 @@ import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuItem;
+import javafx.scene.control.PasswordField;
 import javafx.scene.control.RadioMenuItem;
 import javafx.scene.control.Slider;
 import javafx.scene.control.Spinner;
@@ -552,6 +553,17 @@ public class GuiDriver {
     }
 
     /** Sets the text of the {@code field}-th text field and returns the text it then holds. */
+    /** Shown in place of a password field's text in replies, marks and logs. */
+    static final String HIDDEN = "••••••";
+
+    /** What may be shown of {@code text} entered in {@code node}: a password field's text never leaves the field. */
+    static String shown(Node node, String text) {
+        if (!(node instanceof PasswordField))
+            return text;
+        ActionLog.secret();
+        return text == null || text.isEmpty() ? "" : HIDDEN;
+    }
+
     public String typeInto(Window window, String text, int field) throws Exception {
         var target = fx(() -> {
             var fields = new ArrayList<TextInputControl>();
@@ -560,7 +572,7 @@ public class GuiDriver {
                 throw new IllegalStateException("No text field #" + field + " in window (found " + fields.size() + ")");
             return fields.get(field);
         });
-        var action = "type “" + text + "”";
+        var action = "type “" + shown(target, text) + "”";
         ActionLog.target(window, action);
         indicator.before(target, action);
         var result = fx(() -> {
@@ -568,8 +580,8 @@ public class GuiDriver {
             return target.getText();
         });
         indicator.mark(target, action);
-        logger.info("typed '{}' into field {}", text, field);
-        return result;
+        logger.info("typed '{}' into field {}", shown(target, text), field);
+        return shown(target, result);
     }
 
     /** The showing stage whose title contains {@code titleSubstring}; if null, an open context menu, else the focused or topmost non-main stage, else the main one. */
@@ -737,7 +749,8 @@ public class GuiDriver {
             recurse = true;
         } else if (node instanceof TextInputControl t) {
             line = "%s%s prompt=\"%s\" text=\"%s\"%s".formatted(tag(t, page), t.getClass().getSimpleName(),
-                    Objects.toString(t.getPromptText(), ""), t.getText(), t.isDisabled() ? " [disabled]" : "");
+                    Objects.toString(t.getPromptText(), ""), t instanceof PasswordField && !t.getText().isEmpty() ? HIDDEN : t.getText(),
+                    t.isDisabled() ? " [disabled]" : "");
         } else if (node instanceof Spinner<?> sp) {
             line = "%sSpinner value=%s%s".formatted(tag(sp, page), sp.getValue(), sp.isDisabled() ? " [disabled]" : "");
         } else if (node instanceof Slider sl) {
@@ -814,6 +827,8 @@ public class GuiDriver {
     /** Dispatches a change worked out by {@link #select} or {@link #set}, marking its target for the person watching. */
     private String apply(Change change) {
         logger.info("{}", change.message());
+        if (change.target() instanceof PasswordField)
+            ActionLog.secret();
         ActionLog.target(change.target(), change.action());
         if (change.row() == null) {
             indicator.before(change.target(), change.action());
@@ -1016,8 +1031,9 @@ public class GuiDriver {
                         node.getClass().getSimpleName()));
             }
             var named = label(node).isBlank() ? "" : " “" + label(node) + "”";
-            return new Change(apply, "set %s %s to %s".formatted(node.getClass().getSimpleName(), label(node), value),
-                    "set%s to %s".formatted(named, value), node);
+            var shown = node instanceof PasswordField ? (value.isEmpty() ? "" : HIDDEN) : value;
+            return new Change(apply, "set %s %s to %s".formatted(node.getClass().getSimpleName(), label(node), shown),
+                    "set%s to %s".formatted(named, shown), node);
         });
         return apply(change);
     }
