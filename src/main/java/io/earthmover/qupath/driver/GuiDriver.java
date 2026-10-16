@@ -55,6 +55,7 @@ import javafx.scene.control.TabPane;
 import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextInputControl;
+import javafx.scene.control.TitledPane;
 import javafx.scene.control.ToggleButton;
 import javafx.scene.control.Tooltip;
 import javafx.scene.control.TreeCell;
@@ -200,15 +201,21 @@ public class GuiDriver {
         final int offset, limit, maxText;
         final List<Node> controls = new ArrayList<>();
         final List<int[]> spans = new ArrayList<>();
+        /** The label folded into each control's line, or null. */
+        final List<String> labels = new ArrayList<>();
         /** The plain label written last and where its line is in {@code out}, so the control it names can absorb it. */
         Labeled label;
         int labelStart, labelEnd;
 
         Page(StringBuilder out, int offset, int limit) {
+            this(out, offset, limit, limit == ALL ? Integer.MAX_VALUE : MAX_TEXT);
+        }
+
+        Page(StringBuilder out, int offset, int limit, int maxText) {
             this.out = out;
             this.offset = offset;
             this.limit = limit;
-            this.maxText = limit == ALL ? Integer.MAX_VALUE : MAX_TEXT;
+            this.maxText = maxText;
         }
     }
 
@@ -259,7 +266,7 @@ public class GuiDriver {
             try {
                 message = after.call();
             } catch (Exception e) {
-                message = "done, but could not read the control back: " + e.getMessage();
+                message = "done, but could not read the control back: " + e;
             }
         }
         var opened = openedSince(before);
@@ -282,11 +289,11 @@ public class GuiDriver {
         });
     }
 
-    private static final int BRIEF_CHARS = 1500, BRIEF_CONTROLS = 25, POPUP_CONTROLS = 5;
+    private static final int BRIEF_CHARS = 1500, BRIEF_CONTROLS = 25, POPUP_CONTROLS = 5, POPUP_TEXT = 20_000;
 
     /**
      * A window's outline, whole if it is short or has at most a popup's few controls (so an error's message always
-     * arrives), else its first controls up to about {@code BRIEF_CHARS} and a line saying how to read the rest, so an
+     * arrives, text fields included), else its first controls up to about {@code BRIEF_CHARS} and a line saying how to read the rest, so an
      * action that opens a large dialog such as Preferences does not return all of it. Call on the FX thread.
      */
     private String brief(Window window) {
@@ -294,7 +301,12 @@ public class GuiDriver {
         describe(window.getScene().getRoot(), 0, page);
         var out = page.out;
         int total = page.controls.size();
-        if (out.length() <= BRIEF_CHARS || total <= POPUP_CONTROLS)
+        if (total <= POPUP_CONTROLS) {
+            var whole = new Page(new StringBuilder(titleOf(window)).append('\n'), 0, MAX_ROWS, POPUP_TEXT);
+            describe(window.getScene().getRoot(), 0, whole);
+            return whole.out.toString();
+        }
+        if (out.length() <= BRIEF_CHARS)
             return out.toString();
         int cut = out.lastIndexOf("\n", BRIEF_CHARS) + 1;
         int shown = 0;
@@ -303,8 +315,10 @@ public class GuiDriver {
         if (shown < total)
             cut = Math.min(cut, out.lastIndexOf("\n", page.spans.get(shown)[0]) + 1);
         int more = total - shown;
-        return out.substring(0, cut) + "%s; qupath_describe window=\"%s\"\n".formatted(
-                more > 0 ? "+%d more controls".formatted(more) : "+ more lines", titleOf(window));
+        var title = titleOf(window);
+        return out.substring(0, cut) + "%s; qupath_describe%s\n".formatted(
+                more > 0 ? "+%d more controls".formatted(more) : "+ more lines",
+                title.isEmpty() ? "" : " window=\"" + title + "\"");
     }
 
     /** One line per showing window: title, size and whether it has focus. */
@@ -607,7 +621,6 @@ public class GuiDriver {
         });
     }
 
-    /** Sets the text of the {@code field}-th text field and returns the text it then holds. */
     /** Shown in place of a password field's text in replies, marks and logs. */
     static final String HIDDEN = "••••••";
 
@@ -641,6 +654,8 @@ public class GuiDriver {
 
     /** The showing stage whose title contains {@code titleSubstring}; if null, an open context menu, else the focused or topmost non-main stage, else the main one. */
     public Window window(String titleSubstring) throws Exception {
+        if (!responsive())
+            throw new IllegalStateException(NATIVE_DIALOG);
         Window found = fx(() -> {
             var stages = Window.getWindows().stream().filter(w -> w.isShowing() && w instanceof Stage).toList();
             if (titleSubstring != null)
@@ -733,6 +748,8 @@ public class GuiDriver {
      * qupath_select pick them: a {@code #n}, or the text of the label next to it.
      */
     public String describe(Window window, String control, int offset, int limit) throws Exception {
+        if (!responsive())
+            throw new IllegalStateException(NATIVE_DIALOG);
         return fx(() -> {
             var matches = controls(window, control);
             if (matches.isEmpty())
@@ -753,8 +770,10 @@ public class GuiDriver {
      */
     String state(Window window, Node node) throws Exception {
         return fx(() -> {
-            int n = controls(window, null).indexOf(node);
-            return (n < 0 ? "" : "#" + n + " ") + line(node, label(node), true, MAX_TEXT);
+            var page = new Page(new StringBuilder(), 0, 0);
+            describe(window.getScene().getRoot(), 0, page);
+            int n = page.controls.indexOf(node);
+            return n < 0 ? line(node, label(node), true, MAX_TEXT) : "#" + n + " " + line(node, page.labels.get(n), true, MAX_TEXT);
         });
     }
 
@@ -895,6 +914,7 @@ public class GuiDriver {
             sb.append("  ".repeat(depth));
             int start = sb.length();
             page.controls.add(node);
+            page.labels.add(label);
             sb.append('#').append(page.controls.size() - 1).append(' ').append(line(node, label, false, page.maxText)).append('\n');
             if (node instanceof TableView<?> t)
                 rows(depth, page, t.getItems().size(), row ->
@@ -1014,7 +1034,7 @@ public class GuiDriver {
         for (Node sibling : node.getParent().getChildrenUnmodifiable()) {
             if (sibling == node)
                 break;
-            if (sibling instanceof Labeled l && !(l instanceof ButtonBase))
+            if (sibling instanceof Labeled l && !(l instanceof ButtonBase) && !(l instanceof TitledPane))
                 previous = l;
         }
         return previous;

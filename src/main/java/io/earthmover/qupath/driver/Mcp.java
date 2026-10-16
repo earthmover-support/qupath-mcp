@@ -346,7 +346,8 @@ Both results end with "Opened while waiting:" and the outline of any window that
     }
 
     private static String str(Map<String, Object> a, String key) {
-        return (String) a.get(key);
+        var v = a.get(key);
+        return v == null ? null : v instanceof String t ? t : valueText(v);
     }
 
     /** A JSON number such as 5.0 as 5, so an integer spinner can parse it. */
