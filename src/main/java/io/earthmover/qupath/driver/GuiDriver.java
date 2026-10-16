@@ -464,7 +464,7 @@ public class GuiDriver {
                 boolean first = i == 0;
                 var matches = labeled.stream().filter(tier).filter(m -> first || all.contains(m)).toList();
                 if (matches.size() == 1 || i == 0 && !matches.isEmpty())
-                    return matches.get(0);
+                    return labelledCheckBox(matches.get(0), all);
                 if (matches.size() > 1) {
                     throw new IllegalStateException("%d controls match '%s'; click one by its #n from qupath_describe:\n%s".formatted(
                             matches.size(), text, matches.stream().map(m -> "#%d [near \"%s\"]".formatted(all.indexOf(m), nearestLabel(m)))
@@ -475,15 +475,24 @@ public class GuiDriver {
         });
         logger.info("lookup '{}' -> {}", text, found);
         if (found == null) {
-            var buttons = fx(() -> {
-                var all = new ArrayList<ButtonBase>();
-                findAll(window.getScene().getRoot(), ButtonBase.class, all);
-                return all.stream().map(GuiDriver::name).filter(t -> !t.isBlank()).distinct().limit(MAX_ROWS).toList();
-            });
+            // Only the buttons describe tags, since those are the ones a tooltip or bracketed name reaches.
+            var buttons = fx(() -> controls(window, null).stream().filter(ButtonBase.class::isInstance)
+                    .map(n -> name((ButtonBase) n)).filter(t -> !t.isBlank() && !"(icon)".equals(t)).distinct().limit(MAX_ROWS).toList());
             throw new IllegalStateException("No button '%s' in '%s'. Buttons: %s".formatted(text, titleOf(window),
                     String.join(", ", buttons)));
         }
         return found;
+    }
+
+    /**
+     * The checkbox a plain label names, as a property sheet lays out a checkbox without text beside its label, so clicking
+     * the label ticks the box; else the label itself.
+     */
+    private static Node labelledCheckBox(Labeled match, List<Node> all) {
+        if (match instanceof ButtonBase)
+            return match;
+        return all.stream().filter(n -> n instanceof CheckBox c && unnamed(c) && previousLabel(c) == match).findFirst()
+                .orElse(match);
     }
 
     private static String tooltipText(Node node) {
