@@ -1,8 +1,16 @@
 package io.earthmover.qupath.driver;
 
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -16,6 +24,7 @@ import io.modelcontextprotocol.spec.McpSchema.Content;
 import io.modelcontextprotocol.spec.McpSchema.ImageContent;
 import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import io.modelcontextprotocol.spec.McpStreamableServerTransportProvider;
+import javafx.stage.Window;
 
 /**
  * The QuPath tools, served through the MCP Java SDK. Tool results are text or a PNG image; a failing tool returns
@@ -24,7 +33,8 @@ import io.modelcontextprotocol.spec.McpStreamableServerTransportProvider;
 class Mcp {
 
     private static final String INSTRUCTIONS = "Drives the QuPath GUI and runs Groovy in it. QuPath must be running. "
-            + "Call qupath_describe to read a window as text before taking screenshots.";
+            + "Call qupath_describe to read a window as text before taking screenshots. "
+            + "A result can start with windows that opened or closed since your last call, such as a late dialog.";
 
     private interface Handler {
         List<Content> call(Map<String, Object> args) throws Exception;
@@ -33,6 +43,7 @@ class Mcp {
     private final GuiDriver driver;
     private final DriverServer server;
     private final List<SyncToolSpecification> tools;
+    private final Map<String, Seen> sessions = new ConcurrentHashMap<>();
 
     Mcp(GuiDriver driver, DriverServer server) {
         this.driver = driver;
@@ -309,13 +320,17 @@ Both results end with "Opened while waiting:" and the outline of any window that
                     var who = client == null ? null : client.title() != null ? client.title() : client.name();
                     driver.indicator.busy(true, who);
                     var entry = driver.actions.begin("mcp", who, name, request.arguments());
+                    var seen = sessions.computeIfAbsent(Objects.requireNonNullElse(exchange.sessionId(), ""), k -> new Seen());
+                    var changes = changes(seen);
+                    var outlined = new HashSet<Window>();
+                    driver.outlined.set(outlined);
                     try {
                         // Clients that load tool schemas lazily may call without arguments; say what's needed.
                         if (required != null)
                             for (var r : required.split(","))
                                 if (request.arguments() == null || request.arguments().get(r) == null)
                                     throw new IllegalArgumentException("%s needs `%s`; see its input schema.".formatted(name, r));
-                        var content = handler.call(request.arguments());
+                        var content = prepend(notice(changes, outlined), handler.call(request.arguments()));
                         entry.done(summary(content));
                         var warning = driver.actions.takeWarning();
                         if (warning != null)
@@ -323,13 +338,103 @@ Both results end with "Opened while waiting:" and the outline of any window that
                         return CallToolResult.builder().content(content).isError(false).build();
                     } catch (Throwable t) {
                         var cause = t instanceof ExecutionException && t.getCause() != null ? t.getCause() : t;
-                        var message = cause.getMessage() != null ? cause.getMessage() : cause.toString();
+                        var message = notice(changes, outlined)
+                                + (cause.getMessage() != null ? cause.getMessage() : cause.toString());
                         entry.failed(message);
                         return CallToolResult.builder().addTextContent(message).isError(true).build();
                     } finally {
+                        driver.outlined.remove();
+                        settle(seen, outlined);
                         driver.indicator.busy(false, null);
                     }
                 }).build();
+    }
+
+    /**
+     * The stages one MCP session's agent knows are open: those showing when its previous call ended, and any a result
+     * has outlined since. Weak, so a closed dialog is not kept alive by a session that has gone. Guarded by itself.
+     */
+    private static final class Seen {
+        final Set<Window> windows = Collections.newSetFromMap(new WeakHashMap<>());
+        boolean primed;
+    }
+
+    /** The lines reporting stages that opened since the session's previous call, and the titles of those that closed. */
+    private record Changes(Map<Window, String> opened, List<String> closed) {}
+
+    /**
+     * What changed between the session's previous call and this one, which no result has reported: a dialog that a
+     * background task opens a few seconds after an action returned. Null on the session's first call or when the FX
+     * thread is busy, so this never holds up a call; the change is then reported by a later one.
+     */
+    private Changes changes(Seen seen) {
+        List<Window> known;
+        boolean primed;
+        synchronized (seen) {
+            known = new ArrayList<>(seen.windows);
+            primed = seen.primed;
+        }
+        try {
+            var now = driver.fxWithin(300, () -> {
+                var showing = GuiDriver.showingStages();
+                var opened = new LinkedHashMap<Window, String>();
+                for (var w : showing)
+                    if (primed && !known.contains(w))
+                        opened.put(w, driver.openedLine(w));
+                var closed = known.stream().filter(w -> !w.isShowing()).map(GuiDriver::titleOf).toList();
+                return Map.entry(showing, new Changes(opened, closed));
+            });
+            if (now == null)
+                return null;
+            synchronized (seen) {
+                seen.windows.clear();
+                seen.windows.addAll(now.getKey());
+                seen.primed = true;
+            }
+            return primed ? now.getValue() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Records what the agent now knows: the windows this call outlined, less any that have closed. */
+    private void settle(Seen seen, Set<Window> outlined) {
+        List<Window> showing;
+        try {
+            showing = driver.fxWithin(300, GuiDriver::showingStages);
+        } catch (Exception e) {
+            showing = null;
+        }
+        synchronized (seen) {
+            if (!seen.primed)
+                return;
+            seen.windows.addAll(outlined);
+            if (showing != null)
+                seen.windows.retainAll(showing);
+        }
+    }
+
+    /** One line per change the result does not already show, each ending in a newline; empty if nothing changed. */
+    private static String notice(Changes changes, Set<Window> outlined) {
+        if (changes == null)
+            return "";
+        var sb = new StringBuilder();
+        changes.opened().forEach((w, line) -> {
+            if (!outlined.contains(w))
+                sb.append(line).append('\n');
+        });
+        if (!changes.closed().isEmpty())
+            sb.append(changes.closed().stream().map(t -> "\"" + t + "\"")
+                    .collect(Collectors.joining(", ", "Closed since your last call: ", "\n")));
+        return sb.isEmpty() ? "" : sb.append('\n').toString();
+    }
+
+    private static List<Content> prepend(String notice, List<Content> content) {
+        if (notice.isEmpty())
+            return content;
+        if (!content.isEmpty() && content.get(0) instanceof TextContent t)
+            return Stream.concat(Stream.of((Content) new TextContent(notice + t.text())), content.stream().skip(1)).toList();
+        return Stream.concat(Stream.of((Content) new TextContent(notice.strip())), content.stream()).toList();
     }
 
     /** The text a tool returned, for the action log; an image is noted by its size rather than kept. */

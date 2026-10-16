@@ -9,6 +9,7 @@ import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.function.IntSupplier;
@@ -83,6 +84,9 @@ public class GuiDriver {
     private final File outDir;
     final ActionLog actions;
     final Indicator indicator;
+
+    /** Windows whose outline the current MCP tool call has put in its result; set by Mcp for the length of a call. */
+    final ThreadLocal<Set<Window>> outlined = new ThreadLocal<>();
 
     GuiDriver(QuPathGUI qupath, String outDir) {
         this.qupath = qupath;
@@ -229,17 +233,20 @@ public class GuiDriver {
     String outline(String titleSubstring, int offset, int limit) throws Exception {
         if (!responsive())
             throw new IllegalStateException(NATIVE_DIALOG);
-        return fx(() -> {
+        var described = new ArrayList<Window>();
+        var out = fx(() -> {
             var sb = new StringBuilder();
             if (titleSubstring != null) {
-                var matches = stages(titleSubstring);
-                for (int i = 0; i < matches.size(); i++)
-                    sb.append("[%d] ".formatted(i)).append(describe(matches.get(i), offset, limit));
+                described.addAll(stages(titleSubstring));
+                for (int i = 0; i < described.size(); i++)
+                    sb.append("[%d] ".formatted(i)).append(describe(described.get(i), offset, limit));
                 return sb.toString().strip();
             }
             for (Window w : Window.getWindows())
-                if (w.isShowing() && (w instanceof Stage && w != qupath.getStage() || w instanceof ContextMenu))
+                if (w.isShowing() && (w instanceof Stage && w != qupath.getStage() || w instanceof ContextMenu)) {
+                    described.add(w);
                     sb.append(describe(w, offset, limit));
+                }
             var viewer = qupath.getViewer();
             var data = viewer.getImageData();
             return sb.append("%s\nimage: %s\ndownsample: %s centre: %s, %s z: %d t: %d\nannotations: %s".formatted(
@@ -248,6 +255,14 @@ public class GuiDriver {
                     viewer.getZPosition(), viewer.getTPosition(),
                     data == null ? null : data.getHierarchy().getAnnotationObjects().size())).toString().strip();
         });
+        noteOutlined(described);
+        return out;
+    }
+
+    private void noteOutlined(List<Window> windows) {
+        var set = outlined.get();
+        if (set != null)
+            set.addAll(windows);
     }
 
     /**
@@ -280,13 +295,38 @@ public class GuiDriver {
 
     /** The outline of each window showing now that was not in {@code before}, cut short as {@link #brief} does, or an empty string. */
     String openedSince(List<Window> before) throws Exception {
-        return fx(() -> {
+        var opened = new ArrayList<Window>();
+        var out = fx(() -> {
             var sb = new StringBuilder();
             for (Window w : Window.getWindows())
-                if (w.isShowing() && !before.contains(w))
+                if (w.isShowing() && !before.contains(w)) {
+                    opened.add(w);
                     sb.append(brief(w));
+                }
             return sb.toString();
         });
+        noteOutlined(opened);
+        return out;
+    }
+
+    /** Showing stages, which leaves out tooltips, popups and context menus. Call on the FX thread. */
+    static List<Window> showingStages() {
+        return Window.getWindows().stream().filter(w -> w.isShowing() && w instanceof Stage).toList();
+    }
+
+    /**
+     * A line reporting a window that opened between two tool calls, followed by its outline when that is at most ten
+     * lines; a longer one is left to qupath_describe. Call on the FX thread.
+     */
+    String openedLine(Window w) {
+        var line = "Opened since your last call: \"%s\" — %.0fx%.0f".formatted(titleOf(w), w.getWidth(), w.getHeight());
+        try {
+            var outline = describe(w).strip().lines().skip(1).toList();
+            return outline.size() > 10 ? line + "; see qupath_describe"
+                    : outline.stream().map(l -> "\n  " + l).collect(Collectors.joining("", line, ""));
+        } catch (Exception e) {
+            return line;
+        }
     }
 
     private static final int BRIEF_CHARS = 1500, BRIEF_CONTROLS = 25, POPUP_CONTROLS = 5, POPUP_TEXT = 20_000;
@@ -387,6 +427,21 @@ public class GuiDriver {
     public <T> T fx(Callable<T> task) throws Exception {
         if (Platform.isFxApplicationThread())
             return task.call();
+        return onFx(task).get(60, TimeUnit.SECONDS);
+    }
+
+    /** Like {@link #fx}, but null if the FX thread has not run {@code task} within {@code millis}. */
+    <T> T fxWithin(long millis, Callable<T> task) throws Exception {
+        if (Platform.isFxApplicationThread())
+            return task.call();
+        try {
+            return onFx(task).get(millis, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            return null;
+        }
+    }
+
+    private static <T> CompletableFuture<T> onFx(Callable<T> task) {
         var future = new CompletableFuture<T>();
         Platform.runLater(() -> {
             try {
@@ -395,7 +450,7 @@ public class GuiDriver {
                 future.completeExceptionally(t);
             }
         });
-        return future.get(60, TimeUnit.SECONDS);
+        return future;
     }
 
     /** Writes a PNG of every showing window as {@code <name>-<i>-<title>.png} and returns the files. */
