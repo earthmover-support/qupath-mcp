@@ -221,7 +221,7 @@ Both results end with "Opened while waiting:" and the outline of any window that
                                     new TextContent("%dx%d %s".formatted(shot.width(), shot.height(), shot.mime().substring(6))));
                         }),
                 tool("qupath_show_actions", """
-                        Set how QuPath shows the person watching what you do, and return the setting.
+                        Set how qupath-mcp shows the person watching what you do, and return the setting.
 
                         "mark" (default) rings each control you act on and lists recent actions in the window's corner, \
                         without slowing you down. "paced" also glides a pointer to each target and waits `delay_ms` before \

@@ -22,7 +22,7 @@ To build it yourself instead, run `./gradlew shadowJar` in a clone of the reposi
 
 The MCP server starts with QuPath and logs `MCP server on http://127.0.0.1:51515/mcp`. Untick **Extensions ▸ MCP server ▸ Enabled** to stop it; the choice persists across restarts. The port is the *MCP server port* preference (default 51515) and applies the next time the server starts.
 
-**Extensions ▸ MCP server ▸ Show agent actions** sets what QuPath shows you while the agent works: **Mark** (the default), **Paced** or **Off**. See [Watching the agent](tools.md#watching-the-agent).
+**Extensions ▸ MCP server ▸ Show agent actions** sets what qupath-mcp shows you in QuPath while the agent works: **Mark** (the default), **Paced** or **Off**. See [Watching the agent](tools.md#watching-the-agent).
 
 ## Register the server
 

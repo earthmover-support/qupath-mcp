@@ -29,7 +29,7 @@ qupath-mcp writes every action the agent takes to a log file; see [Action log](a
 
 ## Watching the agent
 
-QuPath shows the person at the screen what the agent does, in one of three modes:
+qupath-mcp shows the person at the screen what the agent does, in one of three modes:
 
 | Mode | What it shows | Effect on the agent |
 |---|---|---|
