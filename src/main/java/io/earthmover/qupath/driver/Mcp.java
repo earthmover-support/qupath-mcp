@@ -33,11 +33,11 @@ import javafx.stage.Window;
 class Mcp {
 
     private static final String INSTRUCTIONS = "Drives the QuPath GUI and runs Groovy in it. Read windows as text with "
-            + "qupath_describe before taking screenshots. The GUI actions (qupath_menu, qupath_click, qupath_select, "
-            + "qupath_set, qupath_key, qupath_close, qupath_open) return without waiting for event handlers, so a modal "
-            + "dialog cannot block them. About a second later (qupath_open waits for the image first) each returns its action result: the open windows and the "
-            + "outline of each window the action opened, a large one cut short. A result can start with windows that "
-            + "opened or closed since your last call, such as a late dialog.";
+            + "qupath_describe before taking screenshots. `window` is a title substring; omitted, it means an open context "
+            + "menu, else the focused or latest dialog, else the main window. GUI actions (menu, click, select, set, key, "
+            + "close, open) return without waiting for event handlers, so a modal dialog cannot block them; about a second "
+            + "later (open waits for the image first) they return the action result: the open windows and an outline of each window the action opened. A "
+            + "result can start with windows that opened or closed since your last call.";
 
     private interface Handler {
         List<Content> call(Map<String, Object> args) throws Exception;
@@ -59,16 +59,12 @@ class Mcp {
         this.server = server;
         this.tools = List.of(
                 tool("qupath_run_groovy", """
-                        Run Groovy in QuPath and return its println output, result and any error.
-
-                        `qupath` is the QuPathGUI. Code runs on a background thread, so wrap GUI access in fx { ... }. \
-                        Prefer qupath_menu, qupath_click, qupath_describe and the other tools for GUI steps; use this for \
-                        anything else. Helpers: fx{}, window(titleSubstring or null), waitFor(titleSubstring, seconds), \
-                        lookup(window, text), click(node), findMenuItem("Help>License"), fire(menuItem), \
-                        typeInto(window, text[, field]), describe(window), view(x, y, downsample[, z, t]). click and fire \
-                        return at once, so a modal dialog they open does not block.""",
+                        Run Groovy in QuPath; returns println output, the result and any error. `qupath` is the QuPathGUI. \
+                        Code runs off the FX thread, so wrap GUI access in fx { }. Use the GUI tools for GUI steps. Helpers: \
+                        fx{}, window(title), waitFor(title, seconds), lookup(window, text), click(node), findMenuItem("A>B"), \
+                        fire(menuItem), describe(window), view(x, y, downsample); click and fire return at once.""",
                         """
-                        {"code":{"description":"Groovy source","type":"string"},"timeout_s":{"description":"Seconds before the call gives up","type":"number","default":60}}""", "code", a -> {
+                        {"code":{"type":"string"},"timeout_s":{"description":"Seconds before giving up","type":"number","default":60}}""", "code", a -> {
                             driver.indicator.note("running script…");
                             var r = server.evaluate(str(a, "code"), num(a, "timeout_s", 60));
                             var output = r.output().isEmpty() ? "" : "output:\n" + r.output() + "\n";
@@ -77,94 +73,68 @@ class Mcp {
                             return text(output + "result: " + r.result());
                         }),
                 tool("qupath_menu", """
-                        Fire a menu item such as "Analyze>Cell detection>Cell detection" and return the action result. \
-                        Drive the dialog it opens with qupath_click, qupath_set and qupath_type.
-
-                        A check item is toggled: "Extensions>MCP server>Enabled" turns this server off after replying, until \
-                        the person turns it back on. File>Open... shows a native chooser no tool can drive; use qupath_open.""",
+                        Fire a menu item such as "Analyze>Cell detection>Cell detection"; returns the action result. A check \
+                        item is toggled ("Extensions>MCP server>Enabled" turns this server off until the person turns it back on). File>Open... opens a native \
+                        chooser no tool can drive; use qupath_open.""",
                         """
-                        {"path":{"description":"Menu path with > between levels, e.g. File>Open URI...","type":"string"}}""", "path",
+                        {"path":{"description":"Levels separated by >","type":"string"}}""", "path",
                         a -> text(driver.act(() -> {
                             driver.fire(driver.findMenuItem(str(a, "path")));
                             return null;
                         }))),
                 tool("qupath_click", """
-                        Click the button, checkbox, label, or table or tree cell whose text is exactly `text`, else whose \
-                        tooltip (or its first line) or accessible text is, which names icon-only buttons; a titled pane is \
-                        expanded or collapsed. `text` may instead be a control's #n from qupath_describe; when several tooltips \
-                        match, the error lists them by #n, and text that repeats is clicked by #n. Returns the action result (the open windows and any window the click \
-                        opened), so an error popup's text comes back directly.""",
+                        Click the button, checkbox, label or cell whose text, tooltip or accessible text is exactly `text`, or \
+                        the control qupath_describe tags #n; a titled pane is expanded or collapsed. If several tooltips match, \
+                        the error lists their #n; click repeated text by #n. Returns the action result, so an error popup's text comes back directly.""",
                         """
-                        {"text":{"description":"Exact text, tooltip or #n from qupath_describe","type":"string"},"window":{"description":"Title substring; default: context menu, else focused or latest dialog, else main window","type":"string"},\
-                        "button":{"description":"right opens the context menu, whose items the result lists","type":"string","enum":["left","right"],"default":"left"},"double":{"description":"Double-click","type":"boolean","default":false}}""",
+                        {"text":{"description":"Text, tooltip or #n","type":"string"},"window":{"description":"Title substring","type":"string"},\
+                        "button":{"description":"right opens the context menu and lists its items","type":"string","enum":["left","right"],"default":"left"},"double":{"type":"boolean","default":false}}""",
                         "text",
                         a -> text(driver.act(() -> driver.click(driver.lookup(driver.window(str(a, "window")), str(a, "text")),
                                 "right".equals(a.get("button")), Boolean.TRUE.equals(a.get("double")))))),
-                tool("qupath_type", """
-                        Set the text of the `field`-th (0-based) text input in a window, counting the editors inside \
-                        spinners and combo boxes, and return the field's text. qupath_set fills a text field by #n.""",
-                        """
-                        {"text":{"description":"Replaces the field's content","type":"string"},"window":{"description":"Title substring; default: context menu, else focused or latest dialog, else main window","type":"string"},"field":{"description":"Which text field, 0 = first in the window","type":"integer","default":0}}""", "text", a -> {
-                            var window = driver.window(str(a, "window"));
-                            int field = (int) num(a, "field", 0);
-                            return text("typed into %s field %d: \"%s\"".formatted(GuiDriver.titleOf(window), field,
-                                    driver.typeInto(window, str(a, "text"), field)));
-                        }),
                 tool("qupath_select", """
-                        Select the item named `text` in a combo box, choice box, list, tree (parents are expanded; QuPath's \
-                        project image list is one), tab pane or table row (any cell with that text).
-
-                        `control` narrows the search to the controls it names. With `check` true or false, a table's matching rows (all of them) get their checkbox ticked or cleared \
-                        instead. Returns the control's qupath_describe line, then the action result.""",
+                        Select the item `text` in a combo box, choice box, list, tree, tab pane or table row (any cell). With \
+                        `check`, tick (true) or clear (false) the checkbox of every matching table row instead. Returns the \
+                        control's qupath_describe line, then the action result.""",
                         """
-                        {"text":{"description":"Text of the item, tab or table row to select","type":"string"},"window":{"description":"Title substring; default: context menu, else focused or latest dialog, else main window","type":"string"},"control":{"description":"Its #n from qupath_describe, or the label next to it","type":"string"},"check":{"description":"For table rows with a checkbox column: true ticks, false clears every matching row","type":"boolean"}}""",
+                        {"text":{"type":"string"},"window":{"description":"Title substring","type":"string"},"control":{"description":"#n or label; omit to try every list-like control","type":"string"},"check":{"type":"boolean"}}""",
                         "text", a -> text(driver.act(() -> driver.select(driver.window(str(a, "window")), str(a, "text"),
                                 str(a, "control"), (Boolean) a.get("check"))))),
                 tool("qupath_set", """
-                        Set a spinner, slider, checkbox (true/false) or text field to `value`.
-
-                        Returns the control's qupath_describe line with the value it now holds, then the action result.""",
+                        Set a spinner, slider, checkbox (true/false), text field or editable combo box to `value`. Returns the control's qupath_describe line \
+                        with the value it now holds, then the action result.""",
                         """
-                        {"value":{"description":"New value: a number for spinners and sliders, true/false for checkboxes, text for fields","type":["string","number","boolean"]},"control":{"description":"Its #n from qupath_describe, or the label next to it","type":"string"},"window":{"description":"Title substring; default: context menu, else focused or latest dialog, else main window","type":"string"}}""",
+                        {"value":{"type":["string","number","boolean"]},"control":{"description":"#n or label","type":"string"},"window":{"description":"Title substring","type":"string"}}""",
                         "value,control", a -> text(driver.act(() -> driver.set(driver.window(str(a, "window")),
                                 valueText(a.get("value")), str(a, "control"))))),
                 tool("qupath_key", """
-                        Send key presses to the focused control of a window: "Enter", "Escape", "Tab", "Ctrl+A", "Shortcut+S" \
-                        (Shortcut is Cmd on macOS), space-separated for several.
-
-                        Enter triggers a dialog's default button and Escape its cancel button. Returns what was sent, then the \
-                        action result.""",
+                        Send space-separated key presses to a window's focused control: Enter (default button), Escape \
+                        (cancel), Tab, Ctrl+A, Shortcut+S (Cmd on macOS). Returns the action result.""",
                         """
-                        {"keys":{"description":"Space-separated key presses","type":"string"},"window":{"description":"Title substring; default: context menu, else focused or latest dialog, else main window","type":"string"}}""", "keys",
+                        {"keys":{"type":"string"},"window":{"description":"Title substring","type":"string"}}""", "keys",
                         a -> text(driver.act(() -> driver.key(driver.window(str(a, "window")), str(a, "keys"))))),
                 tool("qupath_close", """
-                        Close a window as its close button would; one that asks first (such as about unsaved changes) shows \
-                        its prompt, which the action result lists. Use qupath_quit to close QuPath itself.""",
+                        Close a window as its close button would; a prompt it raises shows in the action result.""",
                         """
-                        {"window":{"description":"Title substring; default: context menu, else focused or latest dialog","type":"string"}}""", null,
+                        {"window":{"description":"Title substring","type":"string"}}""", null,
                         a -> text(driver.act(() -> driver.close(driver.window(str(a, "window")))))),
                 tool("qupath_open", """
-                        Open an image by file path or URI in the active viewer, without the native chooser of File>Open.... \
-                        Returns what happened, then the action result (which shows any prompt, such as about unsaved \
-                        changes); follow with qupath_wait on the image path.""",
+                        Open an image file path or URI in the viewer, without File>Open's native chooser. Returns the action \
+                        result; then qupath_wait for the image path.""",
                         """
-                        {"path_or_uri":{"description":"Image file path or URI to open in the viewer","type":"string"}}""", "path_or_uri",
+                        {"path_or_uri":{"type":"string"}}""", "path_or_uri",
                         a -> text(driver.act(() -> driver.open(str(a, "path_or_uri"))))),
                 tool("qupath_describe", DESCRIBE, """
-                        {"window":{"description":"Title substring; omit to describe every open window plus a main-window summary","type":"string"},"control":{"description":"Only this control: its #n or the label next to it, found as qupath_set finds it","type":"string"},"offset":{"description":"First row to list in tables, lists and trees","type":"integer","default":0},"limit":{"description":"Rows to list per table, list or tree; every control is always listed","type":"integer","default":20}}""",
+                        {"window":{"description":"Title substring; omit for all, or with control the default window","type":"string"},"control":{"description":"#n or label","type":"string"},"offset":{"type":"integer","default":0},"limit":{"type":"integer","default":20}}""",
                         null, a -> text(a.get("control") != null
                                 ? driver.describe(driver.window(str(a, "window")), str(a, "control"), (int) num(a, "offset", 0), (int) num(a, "limit", 20))
                                 : describe(str(a, "window"), (int) num(a, "offset", 0), (int) num(a, "limit", 20)))),
                 tool("qupath_wait", """
-                        Wait until `text` appears in (or, with gone=true, disappears from) the qupath_describe output for \
-                        `window`; return the lines that contain it and the open windows.
-
-                        With no `window` it watches all windows and the main-window summary, whose image path shows an image \
-                        switch. Every row of tables, lists and trees is searched, not only the printed page. Fails on timeout \
-                        with the last output. Either result ends with any window that opened meanwhile, such as a warning.""",
+                        Wait until `text` appears in the qupath_describe output, or with `gone` disappears. Returns the \
+                        matching lines, the open windows and any window that opened meanwhile. Searches every table row. \
+                        Without `window` it also watches the main-window summary, so an image path shows an image switch.""",
                         """
-                        {"text":{"description":"Text to wait for in the qupath_describe output","type":"string"},"window":{"description":"Title substring; omit to watch all windows and the main-window summary","type":"string"},"timeout_s":{"description":"Seconds to wait before failing","type":"number","default":30},\
-                        "gone":{"description":"Wait for the text to disappear instead","type":"boolean","default":false}}""", "text", a -> {
+                        {"text":{"type":"string"},"window":{"description":"Title substring; omit for all","type":"string"},"timeout_s":{"type":"number","default":30},"gone":{"type":"boolean","default":false}}""", "text", a -> {
                             var text = str(a, "text");
                             double timeout = num(a, "timeout_s", 30);
                             boolean gone = Boolean.TRUE.equals(a.get("gone"));
@@ -189,31 +159,23 @@ class Mcp {
                             }
                         }),
                 tool("qupath_view", """
-                        Centre the active viewer on image pixel (x, y) at `downsample`, optionally at plane z / timepoint t.
-
-                        It sets the zoom before the centre, so the centre does not shift as it does after setDownsampleFactor \
-                        in Groovy.""",
+                        Centre the viewer on image pixel (x, y) at `downsample` (1 is full resolution), optionally at z / t.""",
                         """
-                        {"x":{"description":"Image x of the new centre, in full-resolution pixels","type":"number"},"y":{"description":"Image y of the new centre, in full-resolution pixels","type":"number"},"downsample":{"description":"Image pixels per screen pixel; 1 is full resolution","type":"number"},\
-                        "z":{"description":"z-slice, or omit to keep","type":"integer"},"t":{"description":"Timepoint, or omit to keep","type":"integer"}}""", "x,y,downsample", a -> {
+                        {"x":{"type":"number"},"y":{"type":"number"},"downsample":{"type":"number"},"z":{"type":"integer"},"t":{"type":"integer"}}""", "x,y,downsample", a -> {
                             driver.view(num(a, "x", 0), num(a, "y", 0), num(a, "downsample", 1),
                                     a.get("z") instanceof Number z ? z.intValue() : null, a.get("t") instanceof Number t ? t.intValue() : null);
                             return text("ok");
                         }),
-                tool("qupath_windows", "List open QuPath windows, one per line: title — WxH, with (focused) on the focused one.",
-                        "{}", null, a -> text(driver.windowsText())),
                 tool("qupath_screenshot", """
-                        Screenshot a QuPath window, default the main window, and report its size. Read dialogs with \
-                        qupath_describe instead. The macOS menu bar is not captured.""",
+                        Screenshot a window; qupath_describe is better for dialogs.""",
                         """
-                        {"window":{"description":"Title substring (see qupath_windows); omit for the main window","type":"string"},"index":{"description":"Which match when several windows share the title, numbered as by qupath_describe","type":"integer","default":0},"max_size":{"description":"Longest side in pixels; larger images are downscaled, never enlarged","type":"integer","default":1024},\
-                        "format":{"description":"png for dialogs, jpeg for slide or viewer content","type":"string","enum":["png","jpeg"],"default":"png"},"quality":{"description":"JPEG quality, 0 to 1","type":"number","default":0.85},\
-                        "viewer":{"description":"Crop to the main window's active viewer","type":"boolean","default":false},\
+                        {"window":{"description":"Title substring; omit for the main window","type":"string"},"index":{"description":"Which match, as qupath_describe numbers them","type":"integer","default":0},"max_size":{"description":"Longest side in pixels","type":"integer","default":1024},\
+                        "format":{"type":"string","enum":["png","jpeg"],"default":"png"},"viewer":{"description":"Crop to the image viewer","type":"boolean","default":false},\
                         "region":{"description":"Crop to [x, y, width, height] in window coordinates","type":"array","items":{"type":"number"},"minItems":4,"maxItems":4}}""", null, a -> {
                             double[] region = a.get("region") instanceof List<?> r
                                     ? r.stream().mapToDouble(n -> ((Number) n).doubleValue()).toArray() : null;
                             var shot = driver.screenshot(str(a, "window"), (int) num(a, "index", 0), (int) num(a, "max_size", 1024),
-                                    "jpeg".equals(a.get("format")) ? "jpeg" : "png", num(a, "quality", 0.85),
+                                    "jpeg".equals(a.get("format")) ? "jpeg" : "png", 0.85,
                                     Boolean.TRUE.equals(a.get("viewer")), region);
                             if (shot == null)
                                 throw new Exception("No open window %d whose title contains '%s'; see qupath_describe.".formatted(
@@ -222,12 +184,11 @@ class Mcp {
                                     new TextContent("%dx%d %s".formatted(shot.width(), shot.height(), shot.mime().substring(6))));
                         }),
                 tool("qupath_show_actions", """
-                        Set how qupath-mcp shows the person watching what you do, and return the setting. "mark" (default) \
-                        rings each control you act on, without slowing you down; "paced" also moves a pointer to it and \
-                        waits `delay_ms` first, for when the person wants to follow along; "off" shows nothing. The setting \
-                        persists across restarts; tell the person if you change it.""",
+                        Set how qupath-mcp shows the person what you do: "mark" rings each control you act on, "paced" also \
+                        moves a pointer there and waits `delay_ms` first, "off" shows nothing. Returns the setting, which persists across \
+                        restarts: tell the person if you change it.""",
                         """
-                        {"mode":{"description":"Omit to keep","type":"string","enum":["off","mark","paced"]},"delay_ms":{"description":"Pause before each paced action; omit to keep","type":"integer","minimum":0,"maximum":5000}}""",
+                        {"mode":{"type":"string","enum":["off","mark","paced"]},"delay_ms":{"type":"integer","minimum":0,"maximum":5000}}""",
                         null, a -> {
                             driver.fx(() -> {
                                 if (a.get("mode") instanceof String m)
@@ -238,39 +199,19 @@ class Mcp {
                             });
                             return text("mode: %s, delay_ms: %d".formatted(Indicator.mode.get().name().toLowerCase(),
                                     Indicator.delayMs.get()));
-                        }),
-                tool("qupath_quit", "Quit QuPath.", "{}", null, a -> {
-                    // Exiting at once would drop the connection before the reply is written.
-                    var t = new Thread(() -> {
-                        try {
-                            Thread.sleep(500);
-                        } catch (InterruptedException e) {
-                            return;
-                        }
-                        driver.quit();
-                    });
-                    t.setDaemon(true);
-                    t.start();
-                    return text("quit requested");
-                }));
+                        }));
     }
 
     private static final String DESCRIBE = """
-            Text outline of a window's controls: buttons, checkboxes, labels, text fields, spinners, sliders, combo boxes, \
-            tabs, tables, lists, trees.
-
-            Read a dialog's state with this before qupath_screenshot. Controls that qupath_click, qupath_select and \
-            qupath_set can address carry a `#n` tag, and a label is shown on the control it names; `control` returns \
-            only that control's lines. A TitledPane marked [collapsed] hides its controls until qupath_click expands \
-            it. Every control is listed; `limit` pages only the rows of tables, lists and trees, from `offset`, ending \
-            with "rows X–Y of N"; the next page is offset=Y. `window` describes every window whose title contains it, \
-            each headed by its index. With no `window`, describes every window but the main one, then gives the main \
-            window's title, image path, downsample, centre, z/t and annotation count.""";
+            Text outline of a window: one control per line, tagged #n where qupath_click, qupath_select and qupath_set \
+            accept it. `control` returns just that control. A [collapsed] titled pane hides its controls until clicked. \
+            Tables, lists and trees show `limit` rows from `offset`. Without `window`: every dialog, then a summary of the \
+            main window (image, zoom, centre, annotations).""";
 
     private String describe(String window, int offset, int limit) throws Exception {
         var out = driver.outline(window, offset, limit);
         if (window != null && out.isEmpty())
-            throw new Exception("No open window whose title contains '%s'; see qupath_windows.".formatted(window));
+            throw new Exception("No open window whose title contains '%s'; see qupath_describe.".formatted(window));
         return out;
     }
 
