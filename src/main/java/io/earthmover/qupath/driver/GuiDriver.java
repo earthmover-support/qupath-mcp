@@ -757,7 +757,11 @@ public class GuiDriver {
      * Returns without waiting, for the same reason as {@link #click}. Firing alone does not change a check or radio
      * item's state; the menu does that first when it is clicked, so this does too.
      */
-    public void fire(MenuItem item) {
+    public void fire(MenuItem item) throws Exception {
+        if (item instanceof Menu menu)
+            throw new IllegalArgumentException("'%s' is a submenu, which does nothing when fired. Items: %s".formatted(
+                    menu.getText(), String.join(", ", fx(() -> menu.getItems().stream()
+                            .filter(m -> !(m instanceof SeparatorMenuItem) && m.getText() != null).map(MenuItem::getText).toList()))));
         logger.info("fire {}", item.getText());
         var path = new ArrayList<String>();
         for (MenuItem m = item; m != null; m = m.getParentMenu())
@@ -997,6 +1001,14 @@ public class GuiDriver {
                 || node instanceof ListView || node instanceof TreeView;
     }
 
+    /** Whether the node is, or contains, a control {@code describe} tags: a label before it names that control. */
+    private static boolean holdsControl(Node node) {
+        if (tagged(node))
+            return true;
+        return node instanceof Parent p && !(node instanceof Labeled)
+                && p.getChildrenUnmodifiable().stream().anyMatch(c -> c.isVisible() && holdsControl(c));
+    }
+
     /** Whether a control has no text of its own to name it, so the label before it does. */
     private static boolean unnamed(Node node) {
         return !(node instanceof ButtonBase) || node instanceof CheckBox c && (c.getText() == null || c.getText().isBlank());
@@ -1196,9 +1208,9 @@ public class GuiDriver {
     }
 
     /**
-     * The label before the node in its parent. A form may wrap a field in a pane with its units, as QuPath's parameter
-     * dialogs do ({@code Label "Sigma"}, then an HBox of the field and {@code Label "µm"}), so a node first in a layout
-     * pane takes the label before that pane, up to two levels out.
+     * The visible label before the node in its parent, with no control between them. A form may wrap a field in a pane
+     * with its units, as QuPath's parameter dialogs do ({@code Label "Sigma"}, then an HBox of the field and
+     * {@code Label "µm"}), so a node first in a layout pane takes the label before that pane, up to two levels out.
      */
     private static Labeled previousLabel(Node node) {
         for (int level = 0; level < 3 && node.getParent() != null; level++) {
@@ -1207,8 +1219,12 @@ public class GuiDriver {
             for (Node sibling : parent.getChildrenUnmodifiable()) {
                 if (sibling == node)
                     break;
+                if (!sibling.isVisible())
+                    continue;
                 if (sibling instanceof Labeled l && !(l instanceof ButtonBase) && !(l instanceof TitledPane))
                     previous = l;
+                else if (holdsControl(sibling))
+                    previous = null;
             }
             if (previous != null || parent.getChildrenUnmodifiable().indexOf(node) != 0 || !(parent instanceof Pane))
                 return previous;

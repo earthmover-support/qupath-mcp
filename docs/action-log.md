@@ -9,7 +9,7 @@ Every MCP tool call, `/groovy` request and start-up script is appended as one JS
 One line, from a test session:
 
 ```json
-{"time":"2026-10-10T20:32:14.139-05:00","source":"mcp","client":"Claude Code","tool":"qupath_set","args":{"control":"Size:","value":7.0},"window":"Cell detection","target":"set “Size:” to 7","ok":true,"ms":31,"result":"set Spinner Size: to 7\nNo new window opened."}
+{"time":"2026-10-19T13:59:31.507169-04:00","source":"mcp","client":"Claude Code","tool":"qupath_set","args":{"control":"Sigma","value":2,"window":"Cell detection"},"window":"Cell detection","target":"set “Sigma” to 2","ok":true,"ms":1013,"result":"#5 TextField \"Sigma\" = \"2\"\n\nQuPath - tumor_091.tif — 1176x767\nWelcome — 460x675\nCell detection — 417x600\nBrightness & contrast — 311x705\n\nNo new window opened.","image":"OpenslideImageServer: file:/Users/ian/camelyon-demo/tumor_091.tif:1664367385000"}
 ```
 
 - `time`: when the call started, ISO 8601 with the local offset.

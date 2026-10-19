@@ -17,9 +17,9 @@ import qupath.lib.gui.extensions.QuPathExtension;
 import qupath.lib.gui.prefs.PathPrefs;
 
 /**
- * Serves MCP from inside QuPath while the "MCP server" preference is on. For tests, {@code qupath.driver.port} starts
- * the server regardless of the preference and {@code qupath.driver.script} runs a Groovy file instead, both on a
- * background thread once the main stage is showing, with {@link GuiDriver} helpers in the binding.
+ * Serves MCP from inside QuPath while Extensions ▸ MCP server ▸ Enabled is on. For tests, {@code qupath.driver.port}
+ * starts the server regardless of that preference and {@code qupath.driver.script} runs a Groovy file instead, both on
+ * a background thread once the main stage is showing, with {@link GuiDriver} helpers in the binding.
  */
 public class GuiDriverExtension implements QuPathExtension {
 
