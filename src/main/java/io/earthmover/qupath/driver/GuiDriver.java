@@ -49,6 +49,7 @@ import javafx.scene.control.Menu;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.RadioMenuItem;
+import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.Slider;
 import javafx.scene.control.Spinner;
 import javafx.scene.control.Tab;
@@ -63,6 +64,7 @@ import javafx.scene.control.TreeCell;
 import javafx.scene.control.TreeItem;
 import javafx.scene.control.TreeTableRow;
 import javafx.scene.control.TreeView;
+import javafx.scene.layout.Pane;
 import javafx.scene.input.ContextMenuEvent;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyCombination;
@@ -188,6 +190,8 @@ public class GuiDriver {
 
     /** Whether the FX thread picks up work within two seconds; a native file chooser blocks it. */
     private boolean responsive() throws Exception {
+        if (Platform.isFxApplicationThread())
+            return true;
         var done = new CompletableFuture<Boolean>();
         Platform.runLater(() -> done.complete(true));
         try {
@@ -346,7 +350,8 @@ public class GuiDriver {
     /**
      * A window's outline, whole if it is short or has at most a popup's few controls (so an error's message always
      * arrives, text fields included), else its first controls up to about {@code BRIEF_CHARS} and a line saying how to read the rest, so an
-     * action that opens a large dialog such as Preferences does not return all of it. Call on the FX thread.
+     * action that opens a large dialog such as Preferences does not return all of it. The first control always shows,
+     * with as many of its rows as fit, even when a wide table alone passes {@code BRIEF_CHARS}. Call on the FX thread.
      */
     private String brief(Window window) {
         var page = new Page(new StringBuilder(titleOf(window)).append('\n'), 0, MAX_ROWS);
@@ -364,7 +369,11 @@ public class GuiDriver {
         int shown = 0;
         while (shown < total && shown < BRIEF_CONTROLS && page.spans.get(shown)[1] <= cut)
             shown++;
-        if (shown < total)
+        if (shown == 0) {
+            int head = out.indexOf("\n", page.spans.get(0)[0]) + 1;
+            cut = Math.max(head, Math.min(cut, page.spans.get(0)[1]));
+            shown = 1;
+        } else if (shown < total)
             cut = Math.min(cut, out.lastIndexOf("\n", page.spans.get(shown)[0]) + 1);
         int more = total - shown;
         var title = titleOf(window);
@@ -704,23 +713,44 @@ public class GuiDriver {
                 : "collapsed TitledPane “%s”".formatted(text);
     }
 
-    /** Finds a menu item by a path such as {@code Help>About}. */
+    /**
+     * Finds a menu item by a path such as {@code Help>About}. A trailing ellipsis is optional, so
+     * {@code Analyze>Cell detection>Cell detection} finds "Cell detection...". The error lists the items at the level
+     * that did not match.
+     */
     public MenuItem findMenuItem(String path) throws Exception {
+        var missing = new String[1];
         var found = fx(() -> {
             var items = qupath.getMenuBar().getMenus().stream().map(m -> (MenuItem) m).toList();
             MenuItem current = null;
+            var at = new StringBuilder();
             for (String part : path.split(">")) {
-                current = items.stream().filter(m -> part.trim().equals(m.getText())).findFirst().orElse(null);
-                if (current == null)
+                var name = menuName(part);
+                current = items.stream().filter(m -> name.equals(menuName(m.getText()))).findFirst().orElse(null);
+                if (current == null) {
+                    var names = items.stream().filter(m -> !(m instanceof SeparatorMenuItem) && m.getText() != null)
+                            .map(MenuItem::getText).toList();
+                    missing[0] = "No menu item '%s' in %s. %s".formatted(part.trim(),
+                            at.isEmpty() ? "the menu bar" : "'" + at + "'",
+                            names.isEmpty() ? "It has no items." : "Items: " + String.join(", ", names));
                     return null;
+                }
+                at.append(at.isEmpty() ? "" : ">").append(current.getText());
                 items = current instanceof Menu menu ? List.copyOf(menu.getItems()) : List.of();
             }
             return current;
         });
         logger.info("findMenuItem '{}' -> {}", path, found);
         if (found == null)
-            throw new IllegalStateException("No menu item " + path);
+            throw new IllegalStateException(missing[0]);
         return found;
+    }
+
+    private static String menuName(String text) {
+        if (text == null)
+            return "";
+        var t = text.trim();
+        return t.endsWith("...") ? t.substring(0, t.length() - 3).trim() : t.endsWith("…") ? t.substring(0, t.length() - 1).trim() : t;
     }
 
     /**
@@ -1165,17 +1195,26 @@ public class GuiDriver {
         return previous == null || previous.getText() == null ? "" : previous.getText();
     }
 
+    /**
+     * The label before the node in its parent. A form may wrap a field in a pane with its units, as QuPath's parameter
+     * dialogs do ({@code Label "Sigma"}, then an HBox of the field and {@code Label "µm"}), so a node first in a layout
+     * pane takes the label before that pane, up to two levels out.
+     */
     private static Labeled previousLabel(Node node) {
-        if (node.getParent() == null)
-            return null;
-        Labeled previous = null;
-        for (Node sibling : node.getParent().getChildrenUnmodifiable()) {
-            if (sibling == node)
-                break;
-            if (sibling instanceof Labeled l && !(l instanceof ButtonBase) && !(l instanceof TitledPane))
-                previous = l;
+        for (int level = 0; level < 3 && node.getParent() != null; level++) {
+            var parent = node.getParent();
+            Labeled previous = null;
+            for (Node sibling : parent.getChildrenUnmodifiable()) {
+                if (sibling == node)
+                    break;
+                if (sibling instanceof Labeled l && !(l instanceof ButtonBase) && !(l instanceof TitledPane))
+                    previous = l;
+            }
+            if (previous != null || parent.getChildrenUnmodifiable().indexOf(node) != 0 || !(parent instanceof Pane))
+                return previous;
+            node = parent;
         }
-        return previous;
+        return null;
     }
 
     /** The first item whose name equals {@code text}, else the first that contains it. */
