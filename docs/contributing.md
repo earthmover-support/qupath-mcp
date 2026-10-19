@@ -21,8 +21,8 @@ pixi run -e docs docs-build    # write site/
 
 ## Releasing
 
-1. Set the version in `build.gradle.kts` and push.
-2. Push a tag named `v<version>`, for example `v0.1.0`. The release workflow builds `./gradlew shadowJar` and attaches `qupath-gui-driver-<version>-all.jar` to a GitHub release for the tag.
+1. Set the version in `build.gradle.kts`, add a section for it to [Changes](changes.md), leading with what breaks for someone upgrading, and push.
+2. Push a tag named `v<version>`, for example `v0.1.0`. The release workflow builds `./gradlew shadowJar` and attaches `qupath-gui-driver-<version>-all.jar` to a GitHub release for the tag. Paste the version's section of Changes into the release notes.
 3. Once the release has its jar, add it to `catalog.json`, newest first, and push. QuPath's extension manager offers it as an update from then on. Do this last: the catalog must never point at a jar that doesn't exist yet.
 
 QuPath reads `catalog.json` from `raw.githubusercontent.com`, which caches it for a minute or more after a push, and keeps the catalog it fetched until QuPath restarts.
