@@ -16,6 +16,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
@@ -267,8 +268,9 @@ class ActionLog {
     }
 
     /**
-     * Keeps the logs under the size limit: deletes the oldest (never this session's) if the user has allowed it, else
-     * warns the user and the agent. Names sort by date, so the oldest come first.
+     * Keeps the logs under the size limit: deletes the oldest if the user has allowed it, else warns the user and the
+     * agent. Names sort by date, so the oldest come first. A log written in the last day is kept, since another QuPath
+     * sharing the folder may still be writing it.
      */
     private void tidy(File dir) {
         var logs = dir.listFiles(f -> f.isFile() && LOG_NAME.matcher(f.getName()).matches());
@@ -283,12 +285,12 @@ class ActionLog {
         if (deleteOldest.get()) {
             Arrays.sort(logs, Comparator.comparing(File::getName));
             int deleted = 0;
-            long freed = 0;
+            long freed = 0, recent = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(1);
             for (var log : logs) {
                 if (bytes <= max)
                     break;
                 long size = log.length();
-                if (log.equals(file) || !log.delete())
+                if (log.equals(file) || log.lastModified() > recent || !log.delete())
                     continue;
                 deleted++;
                 freed += size;

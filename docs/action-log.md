@@ -32,7 +32,7 @@ Most entries are under 1 KB. An entry that returns a long dialog outline can rea
 Logs are kept until they add up to more than **Action log limit (MB)**, 1024 by default, which holds several hundred busy sessions. Over the limit, qupath-mcp does one of two things:
 
 - **By default, it warns and deletes nothing.** It shows a notification in QuPath, and the agent's next successful tool call carries a one-line note asking it to tell you. Delete old logs yourself, raise the limit, or turn on deletion.
-- **With Delete oldest action logs over the limit on, it deletes the oldest logs** until the rest fit under the limit, then shows a notification in QuPath saying how many it deleted and how much space that freed. The current session's log is never deleted.
+- **With Delete oldest action logs over the limit on, it deletes the oldest logs** until the rest fit under the limit, then shows a notification in QuPath saying how many it deleted and how much space that freed. The current session's log, and any log written in the last 24 hours, is never deleted, since another QuPath sharing the folder may still be writing it.
 
 Deletion is off by default because the logs are the record of past sessions; turn it on if you only need recent ones. The check runs when a session writes its first entry, and again if the folder preference changes, so a single long session can pass the limit until the next one starts. Only qupath-mcp's own logs, named like `mcp-20261016-143723.jsonl`, are counted or deleted; other files in the folder are left alone.
 

@@ -369,17 +369,30 @@ public class GuiDriver {
         int shown = 0;
         while (shown < total && shown < BRIEF_CONTROLS && page.spans.get(shown)[1] <= cut)
             shown++;
+        String rowsShown = "";
         if (shown == 0) {
-            int head = out.indexOf("\n", page.spans.get(0)[0]) + 1;
-            cut = Math.max(head, Math.min(cut, page.spans.get(0)[1]));
+            var span = page.spans.get(0);
+            int head = out.indexOf("\n", span[0]) + 1;
+            cut = Math.max(head, Math.min(cut, span[1]));
             shown = 1;
+            if (cut < span[1]) {
+                int rows = (int) out.substring(head, cut).lines().count(), of = rowCount(page.controls.get(0));
+                rowsShown = "  ".repeat(span[2] + 1)
+                        + (rows == 0 ? "%d rows\n".formatted(of) : "rows 1–%d of %d\n".formatted(rows, of));
+            }
         } else if (shown < total)
             cut = Math.min(cut, out.lastIndexOf("\n", page.spans.get(shown)[0]) + 1);
         int more = total - shown;
         var title = titleOf(window);
-        return out.substring(0, cut) + "%s; qupath_describe%s\n".formatted(
+        return out.substring(0, cut) + rowsShown + "%s; qupath_describe%s\n".formatted(
                 more > 0 ? "+%d more controls".formatted(more) : "+ more lines",
                 title.isEmpty() ? "" : " window=\"" + title + "\"");
+    }
+
+    /** How many rows {@code describe} pages through in a table, list or tree. */
+    private static int rowCount(Node node) {
+        return node instanceof TableView<?> t ? t.getItems().size() : node instanceof ListView<?> v ? v.getItems().size()
+                : node instanceof TreeView<?> v ? v.getExpandedItemCount() : 0;
     }
 
     /** One line per showing window: title, size and whether it has focus. */
