@@ -55,6 +55,7 @@ import javafx.scene.control.TabPane;
 import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextInputControl;
+import javafx.scene.control.TitledPane;
 import javafx.scene.control.ToggleButton;
 import javafx.scene.control.Tooltip;
 import javafx.scene.control.TreeCell;
@@ -190,8 +191,36 @@ public class GuiDriver {
         }
     }
 
-    /** Page of table, list and tree rows to print: {@code limit} rows from {@code offset}; {@code controls} collects what is indexed. */
-    private record Page(int offset, int limit, List<Node> controls) {}
+    /**
+     * An outline being written to {@code out}: {@code limit} rows of each table, list and tree from {@code offset}.
+     * {@code controls} collects what is indexed and {@code spans} where each one's lines start and end in {@code out}. A
+     * page of every row also shows text fields whole, since qupath_wait matches against it.
+     */
+    private static final class Page {
+        final StringBuilder out;
+        final int offset, limit, maxText;
+        final List<Node> controls = new ArrayList<>();
+        final List<int[]> spans = new ArrayList<>();
+        /** The label folded into each control's line, or null. */
+        final List<String> labels = new ArrayList<>();
+        /** The plain label written last and where its line is in {@code out}, so the control it names can absorb it. */
+        Labeled label;
+        int labelStart, labelEnd;
+
+        Page(StringBuilder out, int offset, int limit) {
+            this(out, offset, limit, limit == ALL ? Integer.MAX_VALUE : MAX_TEXT);
+        }
+
+        Page(StringBuilder out, int offset, int limit, int maxText) {
+            this.out = out;
+            this.offset = offset;
+            this.limit = limit;
+            this.maxText = maxText;
+        }
+    }
+
+    /** A {@code limit} that lists every row. */
+    static final int ALL = Integer.MAX_VALUE;
 
     /**
      * Outlines of every showing stage matching {@code titleSubstring}, each headed by its index; if null, of every stage
@@ -223,7 +252,8 @@ public class GuiDriver {
 
     /**
      * Runs a non-blocking GUI action, gives any dialog a second to appear, and returns the action's message (if it
-     * returned one), the open windows, and the outline of each window the action opened.
+     * returned one), the open windows, and the outline of each window the action opened. A message that is itself a
+     * {@code Callable} is called after that second, so it can report the state the action's handlers left.
      */
     String act(Callable<?> action) throws Exception {
         var before = windowsNow();
@@ -231,6 +261,14 @@ public class GuiDriver {
         Thread.sleep(1000);
         if (!responsive())
             return NATIVE_DIALOG;
+        if (message instanceof Callable<?> after) {
+            // The action has already happened, so failing to read back its result must not fail the call.
+            try {
+                message = after.call();
+            } catch (Exception e) {
+                message = "done, but could not read the control back: " + e;
+            }
+        }
         var opened = openedSince(before);
         return (message == null ? "" : message + "\n\n") + windowsText()
                 + "\n\n" + (opened.isEmpty() ? "No new window opened." : "Opened by the action:\n" + opened);
@@ -240,15 +278,47 @@ public class GuiDriver {
         return fx(() -> new ArrayList<>(Window.getWindows()));
     }
 
-    /** The outline of each window showing now that was not in {@code before}, or an empty string. */
+    /** The outline of each window showing now that was not in {@code before}, cut short as {@link #brief} does, or an empty string. */
     String openedSince(List<Window> before) throws Exception {
         return fx(() -> {
             var sb = new StringBuilder();
             for (Window w : Window.getWindows())
                 if (w.isShowing() && !before.contains(w))
-                    sb.append(describe(w));
+                    sb.append(brief(w));
             return sb.toString();
         });
+    }
+
+    private static final int BRIEF_CHARS = 1500, BRIEF_CONTROLS = 25, POPUP_CONTROLS = 5, POPUP_TEXT = 20_000;
+
+    /**
+     * A window's outline, whole if it is short or has at most a popup's few controls (so an error's message always
+     * arrives, text fields included), else its first controls up to about {@code BRIEF_CHARS} and a line saying how to read the rest, so an
+     * action that opens a large dialog such as Preferences does not return all of it. Call on the FX thread.
+     */
+    private String brief(Window window) {
+        var page = new Page(new StringBuilder(titleOf(window)).append('\n'), 0, MAX_ROWS);
+        describe(window.getScene().getRoot(), 0, page);
+        var out = page.out;
+        int total = page.controls.size();
+        if (total <= POPUP_CONTROLS) {
+            var whole = new Page(new StringBuilder(titleOf(window)).append('\n'), 0, MAX_ROWS, POPUP_TEXT);
+            describe(window.getScene().getRoot(), 0, whole);
+            return whole.out.toString();
+        }
+        if (out.length() <= BRIEF_CHARS)
+            return out.toString();
+        int cut = out.lastIndexOf("\n", BRIEF_CHARS) + 1;
+        int shown = 0;
+        while (shown < total && shown < BRIEF_CONTROLS && page.spans.get(shown)[1] <= cut)
+            shown++;
+        if (shown < total)
+            cut = Math.min(cut, out.lastIndexOf("\n", page.spans.get(shown)[0]) + 1);
+        int more = total - shown;
+        var title = titleOf(window);
+        return out.substring(0, cut) + "%s; qupath_describe%s\n".formatted(
+                more > 0 ? "+%d more controls".formatted(more) : "+ more lines",
+                title.isEmpty() ? "" : " window=\"" + title + "\"");
     }
 
     /** One line per showing window: title, size and whether it has focus. */
@@ -387,8 +457,7 @@ public class GuiDriver {
             var tiers = List.<java.util.function.Predicate<Labeled>>of(l -> text.equals(l.getText()),
                     l -> text.equals(tooltipText(l)), l -> text.equals(firstLine(tooltipText(l))),
                     l -> text.equals(l.getAccessibleText()));
-            var all = new ArrayList<Node>();
-            describe(window.getScene().getRoot(), 0, new StringBuilder(), new Page(0, 0, all));
+            var all = controls(window, null);
             for (int i = 0; i < tiers.size(); i++) {
                 var tier = tiers.get(i);
                 boolean first = i == 0;
@@ -552,7 +621,6 @@ public class GuiDriver {
         });
     }
 
-    /** Sets the text of the {@code field}-th text field and returns the text it then holds. */
     /** Shown in place of a password field's text in replies, marks and logs. */
     static final String HIDDEN = "••••••";
 
@@ -586,6 +654,8 @@ public class GuiDriver {
 
     /** The showing stage whose title contains {@code titleSubstring}; if null, an open context menu, else the focused or topmost non-main stage, else the main one. */
     public Window window(String titleSubstring) throws Exception {
+        if (!responsive())
+            throw new IllegalStateException(NATIVE_DIALOG);
         Window found = fx(() -> {
             var stages = Window.getWindows().stream().filter(w -> w.isShowing() && w instanceof Stage).toList();
             if (titleSubstring != null)
@@ -667,9 +737,43 @@ public class GuiDriver {
 
     public String describe(Window window, int offset, int limit) throws Exception {
         return fx(() -> {
-            var sb = new StringBuilder(titleOf(window)).append('\n');
-            describe(window.getScene().getRoot(), 0, sb, new Page(offset, limit, new ArrayList<>()));
-            return sb.toString();
+            var page = new Page(new StringBuilder(titleOf(window)).append('\n'), offset, limit);
+            describe(window.getScene().getRoot(), 0, page);
+            return page.out.toString();
+        });
+    }
+
+    /**
+     * The lines {@code describe} gives the controls of the window that {@code control} picks, as qupath_set and
+     * qupath_select pick them: a {@code #n}, or the text of the label next to it.
+     */
+    public String describe(Window window, String control, int offset, int limit) throws Exception {
+        if (!responsive())
+            throw new IllegalStateException(NATIVE_DIALOG);
+        return fx(() -> {
+            var matches = controls(window, control);
+            if (matches.isEmpty())
+                throw new IllegalStateException("No control '%s' in '%s'; qupath_describe shows each as #n".formatted(
+                        control, titleOf(window)));
+            var page = new Page(new StringBuilder(), offset, limit);
+            describe(window.getScene().getRoot(), 0, page);
+            return matches.stream().map(n -> {
+                var span = page.spans.get(page.controls.indexOf(n));
+                return page.out.substring(span[0], span[1]).replace("\n" + "  ".repeat(span[2]), "\n");
+            }).collect(Collectors.joining());
+        });
+    }
+
+    /**
+     * The line {@code describe} gives one control, without the items, columns or rows it would list: what qupath_set and
+     * qupath_select report once their change has been applied.
+     */
+    String state(Window window, Node node) throws Exception {
+        return fx(() -> {
+            var page = new Page(new StringBuilder(), 0, 0);
+            describe(window.getScene().getRoot(), 0, page);
+            int n = page.controls.indexOf(node);
+            return n < 0 ? line(node, label(node), true, MAX_TEXT) : "#" + n + " " + line(node, page.labels.get(n), true, MAX_TEXT);
         });
     }
 
@@ -717,81 +821,125 @@ public class GuiDriver {
                 findAll(child, type, into);
     }
 
-    private static final int MAX_ROWS = 20;
+    private static final int MAX_ROWS = 20, MAX_TEXT = 200;
 
-    /** Marks a control that qupath_select, qupath_set and their {@code control} argument can address. */
-    private static String tag(Node node, Page page) {
-        page.controls().add(node);
-        return "#" + (page.controls().size() - 1) + " ";
+    /** Whether {@code describe} gives the node a {@code #n}, which qupath_click, qupath_select and qupath_set accept. */
+    private static boolean tagged(Node node) {
+        return node instanceof ButtonBase || node instanceof TextInputControl || node instanceof Spinner || node instanceof Slider
+                || node instanceof ComboBox || node instanceof ChoiceBox || node instanceof TabPane || node instanceof TableView
+                || node instanceof ListView || node instanceof TreeView;
+    }
+
+    /** Whether a control has no text of its own to name it, so the label before it does. */
+    private static boolean unnamed(Node node) {
+        return !(node instanceof ButtonBase) || node instanceof CheckBox c && (c.getText() == null || c.getText().isBlank());
+    }
+
+    private static String cap(String text, int max) {
+        return text.length() <= max ? text : text.substring(0, max) + "… (%d chars)".formatted(text.length());
+    }
+
+    /**
+     * A control's line after its {@code #n}: its type, its text or label, and {@code = value}. {@code brief} leaves out
+     * what a combo box, tab pane or table offers, keeping what it holds.
+     */
+    private static String line(Node node, String label, boolean brief, int maxText) {
+        var type = node.getClass().getSimpleName();
+        var named = label == null || label.isBlank() || !unnamed(node) ? "" : " \"" + label + "\"";
+        var disabled = node.isDisabled() ? " [disabled]" : "";
+        if (node instanceof ButtonBase b) {
+            var state = b instanceof CheckBox c ? c.isIndeterminate() ? " [-]" : c.isSelected() ? " [x]" : " [ ]"
+                    : b instanceof ToggleButton t && t.isSelected() ? " [selected]" : "";
+            var shown = !named.isEmpty() ? named : b.getText() != null && !b.getText().isBlank() ? " \"" + b.getText() + "\""
+                    : "(icon)".equals(name(b)) ? "" : " " + name(b);
+            return type + state + shown + disabled;
+        }
+        if (node instanceof TextInputControl t) {
+            var text = Objects.toString(t.getText(), "");
+            var prompt = t.getPromptText() == null || t.getPromptText().isBlank() ? "" : " prompt=\"" + t.getPromptText() + "\"";
+            return "%s%s = \"%s\"%s%s".formatted(type, named,
+                    t instanceof PasswordField && !text.isEmpty() ? HIDDEN : cap(text, maxText), prompt, disabled);
+        }
+        if (node instanceof Spinner<?> sp)
+            return "%s%s = %s%s".formatted(type, named, sp.getValue(), disabled);
+        if (node instanceof Slider sl)
+            return "%s%s = %s range=%s..%s%s".formatted(type, named, sl.getValue(), sl.getMin(), sl.getMax(), disabled);
+        if (node instanceof ComboBox<?> c)
+            return "%s%s = %s%s%s".formatted(type, named, c.getValue(), brief ? "" : " items=" + first(c.getItems()), disabled);
+        if (node instanceof ChoiceBox<?> c)
+            return "%s%s = %s%s%s".formatted(type, named, c.getValue(), brief ? "" : " items=" + first(c.getItems()), disabled);
+        if (node instanceof TabPane tp) {
+            var selected = tp.getSelectionModel().getSelectedItem();
+            return "%s%s%s selected=%s%s".formatted(type, named,
+                    brief ? "" : " tabs=" + tp.getTabs().stream().map(Tab::getText).toList(),
+                    selected == null ? null : selected.getText(), disabled);
+        }
+        if (node instanceof TableView<?> t) {
+            int row = t.getSelectionModel().getSelectedIndex();
+            return "%s%s%s%s%s".formatted(type, named,
+                    brief ? "" : " columns=" + t.getColumns().stream().map(c -> c.getText() + sortMark(t, c)).toList(),
+                    row < 0 ? "" : " selected=row %d of %d".formatted(row + 1, t.getItems().size()), disabled);
+        }
+        Object selected = node instanceof ListView<?> v ? v.getSelectionModel().getSelectedItem()
+                : node instanceof TreeView<?> v && v.getSelectionModel().getSelectedItem() != null
+                        ? v.getSelectionModel().getSelectedItem().getValue() : null;
+        return "%s%s%s%s".formatted(type, named,
+                selected == null ? "" : " selected=\"" + cap(String.valueOf(selected), maxText) + "\"", disabled);
     }
 
     /** The rows {@code offset} to {@code offset + limit} of {@code total}, then a line saying which rows those were. */
-    private static void rows(StringBuilder sb, int depth, Page page, int total, IntFunction<String> row) {
-        int from = Math.min(page.offset(), total), to = Math.min(total, from + page.limit());
+    private static void rows(int depth, Page page, int total, IntFunction<String> row) {
+        var sb = page.out;
+        int from = Math.min(page.offset, total), to = (int) Math.min(total, (long) from + page.limit);
         for (int i = from; i < to; i++)
             sb.append("  ".repeat(depth + 1)).append(row.apply(i)).append('\n');
         sb.append("  ".repeat(depth + 1)).append(total == 0 ? "rows 0 of 0" : "rows %d–%d of %d".formatted(from + 1, to, total)).append('\n');
     }
 
-    private static void describe(Node node, int depth, StringBuilder sb, Page page) {
+    /**
+     * Writes the node's outline to the page, one line per control or label, indented by nesting. A label just before the
+     * control it names is folded into that control's line, as the name qupath_set and qupath_select accept for it.
+     */
+    private static void describe(Node node, int depth, Page page) {
         if (!node.isVisible() || Indicator.isOverlay(node))
             return;
-        String line = null;
-        boolean recurse = false;
-        if (node instanceof ButtonBase b) {
-            var shown = b.getText() != null && !b.getText().isBlank() ? "\"" + b.getText() + "\"" : name(b);
-            line = "%s%s %s%s".formatted(tag(b, page), b.getClass().getSimpleName(), shown,
-                    (b instanceof ToggleButton t && t.isSelected() || b instanceof CheckBox c && c.isSelected() ? " [selected]" : "")
-                            + (b.isDisabled() ? " [disabled]" : ""));
-        } else if (node instanceof Labeled l) {
-            if (l.getText() != null && !l.getText().isBlank() && !"Glyph".equals(l.getClass().getSimpleName()))
-                line = "%s \"%s\"".formatted(l.getClass().getSimpleName(), l.getText());
-            recurse = true;
-        } else if (node instanceof TextInputControl t) {
-            line = "%s%s prompt=\"%s\" text=\"%s\"%s".formatted(tag(t, page), t.getClass().getSimpleName(),
-                    Objects.toString(t.getPromptText(), ""), t instanceof PasswordField && !t.getText().isEmpty() ? HIDDEN : t.getText(),
-                    t.isDisabled() ? " [disabled]" : "");
-        } else if (node instanceof Spinner<?> sp) {
-            line = "%sSpinner value=%s%s".formatted(tag(sp, page), sp.getValue(), sp.isDisabled() ? " [disabled]" : "");
-        } else if (node instanceof Slider sl) {
-            line = "%sSlider value=%s range=%s..%s".formatted(tag(sl, page), sl.getValue(), sl.getMin(), sl.getMax());
-        } else if (node instanceof ComboBox<?> c) {
-            line = "%sComboBox value=%s items=%s".formatted(tag(c, page), c.getValue(), first(c.getItems()));
-        } else if (node instanceof ChoiceBox<?> c) {
-            line = "%sChoiceBox value=%s items=%s".formatted(tag(c, page), c.getValue(), first(c.getItems()));
-        } else if (node instanceof TabPane tp) {
-            sb.append("  ".repeat(depth)).append("%sTabPane tabs=%s selected=%s".formatted(tag(tp, page),
-                    tp.getTabs().stream().map(Tab::getText).toList(),
-                    tp.getSelectionModel().getSelectedItem() == null ? null : tp.getSelectionModel().getSelectedItem().getText())).append('\n');
-            var selected = tp.getSelectionModel().getSelectedItem();
-            if (selected != null && selected.getContent() != null)
-                describe(selected.getContent(), depth + 1, sb, page);
+        var sb = page.out;
+        if (tagged(node)) {
+            String label = null;
+            if (unnamed(node) && page.label != null && page.labelEnd == sb.length() && page.label == previousLabel(node)) {
+                label = page.label.getText();
+                sb.setLength(page.labelStart);
+            }
+            page.label = null;
+            sb.append("  ".repeat(depth));
+            int start = sb.length();
+            page.controls.add(node);
+            page.labels.add(label);
+            sb.append('#').append(page.controls.size() - 1).append(' ').append(line(node, label, false, page.maxText)).append('\n');
+            if (node instanceof TableView<?> t)
+                rows(depth, page, t.getItems().size(), row ->
+                        t.getColumns().stream().map(c -> cellText(c.getCellData(row))).collect(Collectors.joining(" | ")));
+            else if (node instanceof ListView<?> v)
+                rows(depth, page, v.getItems().size(), row -> String.valueOf(v.getItems().get(row)));
+            else if (node instanceof TreeView<?> v)
+                rows(depth, page, v.getExpandedItemCount(),
+                        row -> "  ".repeat(v.getTreeItemLevel(v.getTreeItem(row))) + v.getTreeItem(row).getValue());
+            page.spans.add(new int[] {start, sb.length(), depth});
+            var tab = node instanceof TabPane tp ? tp.getSelectionModel().getSelectedItem() : null;
+            if (tab != null && tab.getContent() != null)
+                describe(tab.getContent(), depth + 1, page);
             return;
-        } else if (node instanceof TableView<?> t) {
-            sb.append("  ".repeat(depth)).append("%sTableView columns=%s".formatted(tag(t, page),
-                    t.getColumns().stream().map(c -> c.getText() + sortMark(t, c)).toList())).append('\n');
-            rows(sb, depth, page, t.getItems().size(), row ->
-                    t.getColumns().stream().map(c -> cellText(c.getCellData(row))).collect(Collectors.joining(" | ")));
-            return;
-        } else if (node instanceof ListView<?> v) {
-            sb.append("  ".repeat(depth)).append(tag(v, page)).append("ListView\n");
-            rows(sb, depth, page, v.getItems().size(), row -> String.valueOf(v.getItems().get(row)));
-            return;
-        } else if (node instanceof TreeView<?> v) {
-            sb.append("  ".repeat(depth)).append(tag(v, page)).append("TreeView\n");
-            rows(sb, depth, page, v.getExpandedItemCount(),
-                    row -> "  ".repeat(v.getTreeItemLevel(v.getTreeItem(row))) + v.getTreeItem(row).getValue());
-            return;
-        } else {
-            recurse = true;
         }
-        if (line != null) {
-            sb.append("  ".repeat(depth)).append(line).append('\n');
+        if (node instanceof Labeled l && l.getText() != null && !l.getText().isBlank() && !"Glyph".equals(l.getClass().getSimpleName())) {
+            page.labelStart = sb.length();
+            sb.append("  ".repeat(depth)).append("%s \"%s\"".formatted(l.getClass().getSimpleName(), l.getText())).append('\n');
+            page.labelEnd = sb.length();
+            page.label = l;
             depth++;
         }
-        if (recurse && node instanceof Parent p)
+        if (node instanceof Parent p)
             for (Node child : p.getChildrenUnmodifiable())
-                describe(child, depth, sb, page);
+                describe(child, depth, page);
     }
 
     /** " ↑" or " ↓" after a column the table is sorted by, so an agent can see that clicking its header took effect. */
@@ -857,9 +1005,9 @@ public class GuiDriver {
 
     /** The controls of the window that carry a {@code #n} tag in {@code describe}, narrowed by a {@code #n} index or label text. */
     private List<Node> controls(Window window, String control) {
-        var page = new Page(0, 0, new ArrayList<>());
-        describe(window.getScene().getRoot(), 0, new StringBuilder(), page);
-        var all = page.controls();
+        var page = new Page(new StringBuilder(), 0, 0);
+        describe(window.getScene().getRoot(), 0, page);
+        var all = page.controls;
         if (control == null)
             return all;
         var index = control.strip().replaceFirst("^#", "");
@@ -868,20 +1016,28 @@ public class GuiDriver {
         return all.stream().filter(n -> (!(n instanceof ButtonBase) || n instanceof CheckBox) && label(n).contains(control)).toList();
     }
 
-    /** The text of the label next to a control: its {@code labelFor} label, else the label just before it in its parent. */
+    /**
+     * What a control is called: its own text, else the text of the label just before it in its parent, as a form lays
+     * out a label and its field.
+     */
     private static String label(Node node) {
-        if (node instanceof Labeled l && l.getText() != null)
+        if (node instanceof Labeled l && l.getText() != null && !l.getText().isBlank())
             return l.getText();
+        var previous = previousLabel(node);
+        return previous == null || previous.getText() == null ? "" : previous.getText();
+    }
+
+    private static Labeled previousLabel(Node node) {
         if (node.getParent() == null)
-            return "";
+            return null;
         Labeled previous = null;
         for (Node sibling : node.getParent().getChildrenUnmodifiable()) {
             if (sibling == node)
                 break;
-            if (sibling instanceof Labeled l && !(l instanceof ButtonBase))
+            if (sibling instanceof Labeled l && !(l instanceof ButtonBase) && !(l instanceof TitledPane))
                 previous = l;
         }
-        return previous == null || previous.getText() == null ? "" : previous.getText();
+        return previous;
     }
 
     /** The first item whose name equals {@code text}, else the first that contains it. */
@@ -989,25 +1145,34 @@ public class GuiDriver {
     /**
      * Selects the item named {@code text} in a combo box, choice box, list, tree (expanding its parents), tab pane or
      * table (a row with a cell of that text) of the window; {@code control} narrows the controls tried. With {@code check}, a table's
-     * matching rows have their checkbox ticked or cleared instead. Returns without waiting for handlers.
+     * matching rows have their checkbox ticked or cleared instead. Returns without waiting for handlers, and what to call
+     * once they have run for the control's line as {@code describe} gives it (for {@code check}, how many rows changed).
      */
-    public String select(Window window, String text, String control, Boolean check) throws Exception {
+    public Callable<String> select(Window window, String text, String control, Boolean check) throws Exception {
+        var chosen = new Node[1];
         var change = fx(() -> {
             for (Node node : controls(window, control)) {
                 Change c = node instanceof ComboBox<?> n ? selectIn(n, text) : node instanceof ChoiceBox<?> n ? selectIn(n, text)
                         : node instanceof ListView<?> n ? selectIn(n, text) : node instanceof TreeView<?> n ? selectIn(n, text)
                         : node instanceof TabPane n ? selectIn(n, text) : node instanceof TableView<?> n ? selectIn(n, text, check) : null;
-                if (c != null)
+                if (c != null) {
+                    chosen[0] = node;
                     return c.at(node);
+                }
             }
             throw new IllegalStateException("No item '%s' in %s; qupath_describe lists the controls and their rows".formatted(
                     text, control == null ? "any combo box, list, tree, tab pane or table" : "control " + control));
         });
-        return apply(change);
+        var message = apply(change);
+        return check != null ? () -> message : () -> state(window, chosen[0]);
     }
 
-    /** Sets a spinner, slider, checkbox or text field picked by {@code control} (a {@code #n} from describe, or its label's text). */
-    public String set(Window window, String value, String control) throws Exception {
+    /**
+     * Sets a spinner, slider, checkbox or text field picked by {@code control} (a {@code #n} from describe, or its label's
+     * text). Returns without waiting for handlers, and what to call once they have run for the control's line as
+     * {@code describe} gives it, with the value it then holds.
+     */
+    public Callable<String> set(Window window, String value, String control) throws Exception {
         var change = fx(() -> {
             var matches = controls(window, control);
             if (matches.isEmpty())
@@ -1035,7 +1200,8 @@ public class GuiDriver {
             return new Change(apply, "set %s %s to %s".formatted(node.getClass().getSimpleName(), label(node), shown),
                     "set%s to %s".formatted(named, shown), node);
         });
-        return apply(change);
+        apply(change);
+        return () -> state(window, change.target());
     }
 
     /**

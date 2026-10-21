@@ -62,7 +62,7 @@ class Mcp {
 
                         A check menu item is toggled, as a click would (so "Extensions>MCP server>Enabled" turns this server off, after \
                         replying; turn it back on from QuPath's menu). Waits about a second and returns the open windows, one per \
-                        line, then the description of each window the item opened, or "No new window opened." File choosers are \
+                        line, then the outline of each window the item opened (a large one cut short), or "No new window opened." File choosers are \
                         native dialogs the tools cannot see: if the UI stops responding, that is reported. \
                         Use qupath_click / qupath_type to drive the dialog.""",
                         """
@@ -81,7 +81,7 @@ class Mcp {
                         `window` is a title substring; default is an open context menu, else the focused or topmost non-main \
                         window, else the main window. `button` "right" opens the node's context menu and returns its items; \
                         `double` double-clicks. Waits about a second and returns the open windows, one per line, then the \
-                        description of each window the click opened (so an error popup's text is returned directly), or \
+                        outline of each window the click opened (a large one cut short; an error popup's text in full), or \
                         "No new window opened." Prefer this over qupath_run_groovy for dialogs.""",
                         """
                         {"text":{"description":"Exact text, tooltip text or #n (from qupath_describe) of the button, checkbox, label or menu item to click","type":"string"},"window":{"description":"Title substring of the target window; omit for the focused dialog (else the main window)","type":"string"},\
@@ -109,7 +109,7 @@ class Mcp {
 
                         `control` narrows the search to one control: its `#n` from qupath_describe, or the text of its label. \
                         With `check` true or false, a table's matching rows (all of them) get their checkbox ticked or cleared \
-                        instead. Returns what was selected, the open windows and any window it opened.""",
+                        instead. Returns the control's qupath_describe line, the open windows and any window it opened.""",
                         """
                         {"text":{"description":"Text of the item, tab or table row to select","type":"string"},"window":{"description":"Title substring of the target window; omit for the focused dialog (else the main window)","type":"string"},"control":{"description":"Which control: its #n from qupath_describe, an index, or the label next to it","type":"string"},"check":{"description":"For table rows with a checkbox column: true ticks, false clears every matching row","type":"boolean"}}""",
                         "text", a -> text(driver.act(() -> driver.select(driver.window(str(a, "window")), str(a, "text"),
@@ -117,8 +117,8 @@ class Mcp {
                 tool("qupath_set", """
                         Set a spinner, slider, checkbox (true/false) or text field to `value`.
 
-                        `control` is its `#n` from qupath_describe, or the text of its label. Returns what was set, the open \
-                        windows and any window it opened.""",
+                        `control` is its `#n` from qupath_describe, or the text of its label. Returns the control's qupath_describe \
+                        line with the value it now holds, the open windows and any window it opened.""",
                         """
                         {"value":{"description":"New value: a number for spinners and sliders, true/false for checkboxes, text for fields","type":["string","number","boolean"]},"control":{"description":"Which control: its #n from qupath_describe, an index, or the label next to it","type":"string"},"window":{"description":"Title substring of the target window; omit for the focused dialog (else the main window)","type":"string"}}""",
                         "value,control", a -> text(driver.act(() -> driver.set(driver.window(str(a, "window")),
@@ -148,10 +148,13 @@ class Mcp {
                         {"path_or_uri":{"description":"Image file path or URI to open in the viewer","type":"string"}}""", "path_or_uri",
                         a -> text(driver.act(() -> driver.open(str(a, "path_or_uri"))))),
                 tool("qupath_describe", DESCRIBE, """
-                        {"window":{"description":"Title substring; omit to describe every open window plus a main-window summary","type":"string"},"offset":{"description":"First row to list in tables, lists and trees","type":"integer","default":0},"limit":{"description":"Rows to list per table, list or tree","type":"integer","default":20}}""",
-                        null, a -> text(describe(str(a, "window"), (int) num(a, "offset", 0), (int) num(a, "limit", 20)))),
+                        {"window":{"description":"Title substring; omit to describe every open window plus a main-window summary","type":"string"},"control":{"description":"Only this control: its #n or the label next to it, found as qupath_set finds it (window defaults to the focused dialog)","type":"string"},"offset":{"description":"First row to list in tables, lists and trees","type":"integer","default":0},"limit":{"description":"Rows to list per table, list or tree; every control is always listed","type":"integer","default":20}}""",
+                        null, a -> text(a.get("control") != null
+                                ? driver.describe(driver.window(str(a, "window")), str(a, "control"), (int) num(a, "offset", 0), (int) num(a, "limit", 20))
+                                : describe(str(a, "window"), (int) num(a, "offset", 0), (int) num(a, "limit", 20)))),
                 tool("qupath_wait", """
-                        Wait until `text` appears in (or, with gone=true, disappears from) the qupath_describe output; return that output.
+                        Wait until `text` appears in (or, with gone=true, disappears from) the qupath_describe output; return \
+                        the lines that contain it and the open windows.
 
                         `window` is a title substring, as in qupath_describe. With no `window` it watches all open windows and the \
                         main-window summary, so it also detects an image switch by the image path. Every row of tables, lists and trees is \
@@ -167,13 +170,15 @@ Both results end with "Opened while waiting:" and the outline of any window that
                             var before = driver.windowsNow();
                             while (true) {
                                 // Matched against every row, so an item far down a long table counts once it is there.
-                                boolean done = driver.outline(str(a, "window"), 0, Integer.MAX_VALUE).contains(text) != gone;
+                                var all = driver.outline(str(a, "window"), 0, GuiDriver.ALL);
+                                boolean done = all.contains(text) != gone;
                                 if (done || System.nanoTime() >= deadline) {
-                                    var out = driver.outline(str(a, "window"), 0, 20);
                                     var opened = driver.openedSince(before);
-                                    out += opened.isEmpty() ? "" : "\n\nOpened while waiting:\n" + opened;
+                                    opened = opened.isEmpty() ? "" : "\n\nOpened while waiting:\n" + opened;
                                     if (done)
-                                        return text(out);
+                                        return text((gone ? "'%s' is gone".formatted(text) : matching(all, text))
+                                                + "\n\n" + driver.windowsText() + opened);
+                                    var out = driver.outline(str(a, "window"), 0, 20) + opened;
                                     throw new Exception(("Timed out after %ss waiting for '%s' to %s; every row of every table, "
                                             + "list and tree was searched. Last output, first 20 rows of each:\n%s").formatted(
                                             timeout, text, gone ? "disappear" : "appear", out));
@@ -261,8 +266,9 @@ Both results end with "Opened while waiting:" and the outline of any window that
             tabs, tables, lists, trees.
 
             Use this before qupath_screenshot to read a dialog's state as text. Controls that qupath_select and qupath_set \
-            can address carry a `#n` tag. Tables, lists and trees print `limit` rows (default 20) from `offset` and end with \
-            "rows X–Y of N"; ask for the next page with offset=Y. `window` is a title substring and \
+            can address carry a `#n` tag, and a label is shown on the control it names. `control` returns only that \
+            control's lines. Every control is listed; `limit` pages only the rows of tables, lists and trees: `limit` rows \
+            (default 20) from `offset`, ending with "rows X–Y of N"; ask for the next page with offset=Y. `window` is a title substring and \
             describes every open window it matches, each headed by its index (a popup can share its dialog's title). \
             With no `window`, describes every open window except the main one (and any context menu), and for the main window gives only the \
             title, the viewer's image server path, downsample, centre, z/t and annotation count.""";
@@ -272,6 +278,20 @@ Both results end with "Opened while waiting:" and the outline of any window that
         if (window != null && out.isEmpty())
             throw new Exception("No open window whose title contains '%s'; see qupath_windows.".formatted(window));
         return out;
+    }
+
+    /** The outline lines that contain {@code text}, a long one shortened to the part around it. */
+    private static String matching(String outline, String text) {
+        var lines = outline.lines().filter(l -> l.contains(text)).map(String::strip).toList();
+        if (lines.isEmpty())
+            return "found '%s'".formatted(text);
+        var shown = lines.stream().limit(20).map(l -> {
+            if (l.length() <= 200)
+                return l;
+            int at = l.indexOf(text), from = Math.max(0, at - 80), to = Math.min(l.length(), at + text.length() + 80);
+            return (from > 0 ? "…" : "") + l.substring(from, to) + (to < l.length() ? "…" : "");
+        }).collect(Collectors.joining("\n"));
+        return lines.size() <= 20 ? shown : shown + "\n+%d more lines".formatted(lines.size() - 20);
     }
 
     void build(McpStreamableServerTransportProvider transport) {
@@ -326,7 +346,8 @@ Both results end with "Opened while waiting:" and the outline of any window that
     }
 
     private static String str(Map<String, Object> a, String key) {
-        return (String) a.get(key);
+        var v = a.get(key);
+        return v == null ? null : v instanceof String t ? t : valueText(v);
     }
 
     /** A JSON number such as 5.0 as 5, so an integer spinner can parse it. */
