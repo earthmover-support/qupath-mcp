@@ -9,7 +9,7 @@ Every MCP tool call, `/groovy` request and start-up script is appended as one JS
 One line, from a test session:
 
 ```json
-{"time":"2026-10-10T20:32:14.139-05:00","source":"mcp","client":"Claude Code","tool":"qupath_set","args":{"control":"Size:","value":7.0},"window":"Cell detection","target":"set “Size:” to 7","ok":true,"ms":31,"result":"set Spinner Size: to 7\nNo new window opened."}
+{"time":"2026-10-19T13:59:31.507169-04:00","source":"mcp","client":"Claude Code","tool":"qupath_set","args":{"control":"Sigma","value":2,"window":"Cell detection"},"window":"Cell detection","target":"set “Sigma” to 2","ok":true,"ms":1013,"result":"#5 TextField \"Sigma\" = \"2\"\n\nQuPath - tumor_091.tif — 1176x767\nWelcome — 460x675\nCell detection — 417x600\nBrightness & contrast — 311x705\n\nNo new window opened.","image":"OpenslideImageServer: file:/Users/ian/camelyon-demo/tumor_091.tif:1664367385000"}
 ```
 
 - `time`: when the call started, ISO 8601 with the local offset.
@@ -21,7 +21,7 @@ One line, from a test session:
 - `result`: the text the tool returned, cut at 4000 characters; an image is replaced by a placeholder giving its type and encoded length. A failed call has `error` instead.
 - `project` and `image`: the paths of the project and image that were open, when there were any.
 
-The log holds the Groovy the agent ran and the text it read back, which can include file paths and anything shown in a dialog. Treat the folder like the project data it describes. Text typed into a password field with `qupath_type` or `qupath_set` is written as `••••••`, here and everywhere else qupath-mcp shows it; Groovy that enters or reads a password is logged as written. On macOS and Linux the extension creates the folder and its files readable by you only.
+The log holds the Groovy the agent ran and the text it read back, which can include file paths and anything shown in a dialog. Treat the folder like the project data it describes. Text `qupath_set` puts in a password field is written as `••••••`, here and everywhere else qupath-mcp shows it; Groovy that enters or reads a password is logged as written. On macOS and Linux the extension creates the folder and its files readable by you only.
 
 The log is a record of what the agent did, not a tamper-proof audit trail: an agent that can run Groovy can also turn logging off or edit the files. The call that turns logging off is still recorded.
 
@@ -32,7 +32,7 @@ Most entries are under 1 KB. An entry that returns a long dialog outline can rea
 Logs are kept until they add up to more than **Action log limit (MB)**, 1024 by default, which holds several hundred busy sessions. Over the limit, qupath-mcp does one of two things:
 
 - **By default, it warns and deletes nothing.** It shows a notification in QuPath, and the agent's next successful tool call carries a one-line note asking it to tell you. Delete old logs yourself, raise the limit, or turn on deletion.
-- **With Delete oldest action logs over the limit on, it deletes the oldest logs** until the rest fit under the limit, then shows a notification in QuPath saying how many it deleted and how much space that freed. The current session's log is never deleted.
+- **With Delete oldest action logs over the limit on, it deletes the oldest logs** until the rest fit under the limit, then shows a notification in QuPath saying how many it deleted and how much space that freed. The current session's log, and any log written in the last 24 hours, is never deleted, since another QuPath sharing the folder may still be writing it.
 
 Deletion is off by default because the logs are the record of past sessions; turn it on if you only need recent ones. The check runs when a session writes its first entry, and again if the folder preference changes, so a single long session can pass the limit until the next one starts. Only qupath-mcp's own logs, named like `mcp-20261016-143723.jsonl`, are counted or deleted; other files in the folder are left alone.
 

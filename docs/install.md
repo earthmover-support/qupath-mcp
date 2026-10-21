@@ -40,7 +40,7 @@ open -g -a QuPath-0.7.0-arm64
 
 ## Check it works
 
-Ask the agent to call `qupath_windows`, or check the server directly:
+Ask the agent to call `qupath_describe`, or check the server directly:
 
 ```bash
 curl localhost:51515/windows

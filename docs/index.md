@@ -36,7 +36,7 @@ The loop an agent runs against a QuPath dialog, here the file-path prompt:
 
 1. `qupath_menu("File>Open URI...")` fires the menu item and returns the open windows, one per line, then the outline of the dialog it opened.
 2. `qupath_describe("Choose path")` returns the dialog's controls as a text outline.
-3. `qupath_type("/path/to/image.tif", "Choose path")` fills in the text field.
+3. `qupath_set("/path/to/image.tif", "#0", "Choose path")` fills in the text field the outline tagged `#0`.
 4. `qupath_click("OK", "Choose path")` presses a button named in that outline and returns the open windows again.
 5. `qupath_screenshot("Choose path")` returns a screenshot of that window as an image when the text outline is not enough.
 
