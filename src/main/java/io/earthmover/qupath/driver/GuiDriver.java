@@ -354,7 +354,7 @@ public class GuiDriver {
             public Object doCall(Window w, String text) throws Exception { return lookup(w, text); }
         });
         b.setVariable("click", new Closure<Object>(this) {
-            public Object doCall(Node n) throws Exception { click(n); return null; }
+            public Object doCall(Node n) throws Exception { click(n, false, false); return null; }
         });
         b.setVariable("findMenuItem", new Closure<Object>(this) {
             public Object doCall(String path) throws Exception { return findMenuItem(path); }
@@ -464,7 +464,7 @@ public class GuiDriver {
                 boolean first = i == 0;
                 var matches = labeled.stream().filter(tier).filter(m -> first || all.contains(m)).toList();
                 if (matches.size() == 1 || i == 0 && !matches.isEmpty())
-                    return labelledCheckBox(matches.get(0), all);
+                    return labelledCheckBox(first ? insidePane(matches) : matches.get(0), all);
                 if (matches.size() > 1) {
                     throw new IllegalStateException("%d controls match '%s'; click one by its #n from qupath_describe:\n%s".formatted(
                             matches.size(), text, matches.stream().map(m -> "#%d [near \"%s\"]".formatted(all.indexOf(m), nearestLabel(m)))
@@ -482,6 +482,24 @@ public class GuiDriver {
                     String.join(", ", buttons)));
         }
         return found;
+    }
+
+    /**
+     * The first match, unless it is a titled pane whose content holds another match: in an open pane titled "Advanced"
+     * with an "Advanced" checkbox, the text means the checkbox, since toggling the pane would hide what is being worked on.
+     */
+    private static Labeled insidePane(List<Labeled> matches) {
+        var m = matches.get(0);
+        if (!(m instanceof TitledPane tp))
+            return m;
+        return matches.stream().skip(1).filter(o -> isDescendant(o, tp)).findFirst().orElse(m);
+    }
+
+    private static boolean isDescendant(Node node, Node ancestor) {
+        for (var p = node.getParent(); p != null; p = p.getParent())
+            if (p == ancestor)
+                return true;
+        return false;
     }
 
     /**
@@ -553,16 +571,19 @@ public class GuiDriver {
     }
 
     /** Returns without waiting: a handler that opens a modal dialog would otherwise block until the dialog closes. */
-    public void click(Node node) {
+    public void click(Node node) throws Exception {
         click(node, false, false);
     }
 
     /**
-     * Buttons are fired; any other node, or a right or double click, gets synthetic mouse events (a context menu
-     * request for the right button), because a cell or label has no action to fire.
+     * Buttons are fired and a titled pane is expanded or collapsed; any other node, or a right or double click, gets
+     * synthetic mouse events (a context menu request for the right button), because a cell or label has no action to
+     * fire. For a titled pane, returns what to call once the toggle has run to report its state, else null.
      */
-    public void click(Node node, boolean right, boolean doubleClick) {
+    public Callable<String> click(Node node, boolean right, boolean doubleClick) throws Exception {
         logger.info("click {} right={} double={}", node, right, doubleClick);
+        if (node instanceof TitledPane tp && !right && !doubleClick && fx(tp::isCollapsible))
+            return toggle(tp);
         var action = (right ? "right-click" : doubleClick ? "double-click" : "click")
                 + (node instanceof Labeled l ? " “" + name(l) + "”" : "");
         ActionLog.target(node, action);
@@ -588,6 +609,28 @@ public class GuiDriver {
                             false, true, null));
         });
         indicator.mark(node, action);
+        return null;
+    }
+
+    /**
+     * Mouse events sent to the pane itself miss its title bar, which is what handles a click, so the pane is expanded
+     * directly. In an accordion, expanding one pane collapses the others, as a click would.
+     */
+    private Callable<String> toggle(TitledPane tp) throws Exception {
+        var text = fx(tp::getText);
+        if (fx(tp::isDisabled))
+            throw new IllegalStateException("TitledPane “%s” is disabled".formatted(text));
+        boolean expand = !fx(tp::isExpanded);
+        var action = (expand ? "expand" : "collapse") + " “" + text + "”";
+        // The pane's own title bar, not a lookup, which would search its content first and can find a nested pane's title.
+        Node title = fx(() -> tp.getChildrenUnmodifiable().stream().filter(n -> n.getStyleClass().contains("title"))
+                .findFirst().orElse(tp));
+        ActionLog.target(tp, action);
+        indicator.before(title, action);
+        Platform.runLater(() -> tp.setExpanded(expand));
+        indicator.mark(title, action);
+        return () -> fx(tp::isExpanded) ? "expanded TitledPane “%s”; qupath_describe lists its controls".formatted(text)
+                : "collapsed TitledPane “%s”".formatted(text);
     }
 
     /** Finds a menu item by a path such as {@code Help>About}. */
@@ -942,7 +985,8 @@ public class GuiDriver {
         }
         if (node instanceof Labeled l && l.getText() != null && !l.getText().isBlank() && !"Glyph".equals(l.getClass().getSimpleName())) {
             page.labelStart = sb.length();
-            sb.append("  ".repeat(depth)).append("%s \"%s\"".formatted(l.getClass().getSimpleName(), l.getText())).append('\n');
+            sb.append("  ".repeat(depth)).append("%s \"%s\"%s".formatted(l.getClass().getSimpleName(), l.getText(),
+                    l instanceof TitledPane tp && tp.isCollapsible() && !tp.isExpanded() ? " [collapsed]" : "")).append('\n');
             page.labelEnd = sb.length();
             page.label = l;
             depth++;
