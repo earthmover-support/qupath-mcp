@@ -143,13 +143,28 @@ class Mcp {
                             double timeout = num(a, "timeout_s", 30);
                             boolean gone = Boolean.TRUE.equals(a.get("gone"));
                             long deadline = System.nanoTime() + (long) (timeout * 1e9);
-                            var before = driver.windowsNow();
+                            List<Window> before = null;
                             while (true) {
-                                // Matched against every row, so an item far down a long table counts once it is there.
-                                var all = driver.outline(str(a, "window"), 0, GuiDriver.ALL, false);
-                                boolean done = all.contains(text) != gone;
+                                // A task running on the FX thread leaves nothing readable until it ends, so the wait
+                                // goes on; only a native dialog, which the person has to close, ends it early.
+                                String all = null;
+                                GuiDriver.UiBusy busy = null;
+                                try {
+                                    if (before == null)
+                                        before = driver.windowsNow();
+                                    // Matched against every row, so an item far down a long table counts once it is there.
+                                    all = driver.outline(str(a, "window"), 0, GuiDriver.ALL, false);
+                                } catch (GuiDriver.UiBusy e) {
+                                    if (e.nativeDialog)
+                                        throw e;
+                                    busy = e;
+                                }
+                                boolean done = all != null && all.contains(text) != gone;
                                 if (done || System.nanoTime() >= deadline) {
-                                    var opened = driver.openedSince(before);
+                                    if (busy != null)
+                                        throw new Exception("Timed out after %ss waiting for '%s' to %s. %s".formatted(
+                                                timeout, text, gone ? "disappear" : "appear", busy.getMessage()));
+                                    var opened = before == null ? "" : driver.openedSince(before);
                                     opened = opened.isEmpty() ? "" : "\n\nOpened while waiting:\n" + opened;
                                     if (done)
                                         return text((gone ? "'%s' is gone".formatted(text) : matching(all, text))
@@ -210,7 +225,7 @@ class Mcp {
             Text outline of a window: one control per line, tagged #n where qupath_click, qupath_select and qupath_set \
             accept it. `control` returns just that control. A [collapsed] titled pane hides its controls until clicked. \
             Tables, lists and trees show `limit` rows from `offset`. Without `window`: every dialog, then a summary of the \
-            main window (image, zoom, centre, annotations, and "command running" while QuPath runs one).""";
+            main window (image, zoom, centre, annotations, and "command running" while a command, script or progress bar runs).""";
 
     private String describe(String window, int offset, int limit) throws Exception {
         var out = driver.outline(window, offset, limit);

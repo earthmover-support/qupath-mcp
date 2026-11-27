@@ -4,7 +4,9 @@
 
 ### Knowing what happened
 
-- **An agent can tell when a command started from a dialog has finished.** A command with a parameter dialog, such as Cell detection, keeps running after **Run**, and its dialog stays open. The action result now says so and names the wait: `qupath_wait(text="command running", gone=True)`, which ends on the `command running` line in the main-window summary. See [Commands that keep running](tools.md#notes).
+- **An agent can tell when work it started has finished.** Cell detection and other commands with a parameter dialog keep running after **Run**, and their dialog stays open. The summary from `qupath_describe` with no `window` ends with `command running` while a command, a Script Editor script, or a progress bar in an open window is running, and an action result that leaves one running says so and names the wait: `qupath_wait(text="command running", gone=True)`. See [Work that keeps running](tools.md#notes).
+- **A task on QuPath's UI thread is reported as busy, not as a native dialog.** While a command such as the pixel classifier's Create objects holds the UI thread, tools say what it is running, and `qupath_wait` keeps polling instead of failing.
+- **`qupath_describe` shows progress bars and spinners**, as `ProgressBar 40%` or `ProgressBar [running]`.
 - **Results report new history steps**, `Added to history: Cell detection`, for steps added during a call and since the agent's last call. A command that fails adds no step.
 
 ## 0.2.0
