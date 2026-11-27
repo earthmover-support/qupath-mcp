@@ -1,6 +1,12 @@
 # Changes
 
-## Unreleased
+## 0.3.1
+
+### If you're upgrading from 0.3.0
+
+- **`qupath_click` can now fail where it used to guess.** When two or more controls have exactly the text it was given, it lists them as `#n [near "label"]` instead of clicking the first; click one by its `#n`. A plain label with the same text as a control no longer takes the click.
+
+### Clicking
 
 - **`qupath_click` prefers a control to a plain label with the same text.** In a form that puts a label before a field and a button with the same text after it, such as `Search [field] [Search]`, `qupath_click("Search")` clicked the label, which does nothing; it now clicks the button.
 - **Text that several controls share is an error, not a guess.** With a **Search** button on each of two rows, `qupath_click("Search")` clicked the first; it now fails and lists both as `#n [near "label"]`, as it already did for tooltips. Repeated text in table and tree cells still clicks the first row.
