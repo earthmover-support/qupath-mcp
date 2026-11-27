@@ -1,5 +1,9 @@
 # Changes
 
+## Unreleased
+
+- **`qupath_click` prefers a control to a plain label with the same text.** In a form that puts a label before a field and a button with the same text after it, such as `Search [field] [Search]`, `qupath_click("Search")` clicked the label, which does nothing; it now clicks the button.
+
 ## 0.3.0
 
 ### If you're upgrading from 0.2.0
