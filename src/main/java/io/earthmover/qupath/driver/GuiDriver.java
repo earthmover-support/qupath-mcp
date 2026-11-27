@@ -692,15 +692,18 @@ public class GuiDriver {
                 var tier = tiers.get(i);
                 boolean first = i == 0;
                 var matches = labeled.stream().filter(tier).filter(m -> first || all.contains(m)).toList();
-                if (first)
+                if (first) {
                     matches = notPlainLabels(matches);
+                    // Two controls with the same text (a Search button on each of two rows) are ambiguous; table and
+                    // tree cells have no #n, so a repeated cell text still clicks the first.
+                    var tagged = matches.stream().filter(all::contains).toList();
+                    if (tagged.size() > 1)
+                        throw ambiguous(text, tagged, all);
+                }
                 if (matches.size() == 1 || i == 0 && !matches.isEmpty())
                     return labelledCheckBox(first ? insidePane(matches) : matches.get(0), all);
-                if (matches.size() > 1) {
-                    throw new IllegalStateException("%d controls match '%s'; click one by its #n from qupath_describe:\n%s".formatted(
-                            matches.size(), text, matches.stream().map(m -> "#%d [near \"%s\"]".formatted(all.indexOf(m), nearestLabel(m)))
-                                    .collect(Collectors.joining("\n"))));
-                }
+                if (matches.size() > 1)
+                    throw ambiguous(text, matches, all);
             }
             return null;
         });
@@ -714,6 +717,13 @@ public class GuiDriver {
                     String.join(", ", buttons), hint));
         }
         return found;
+    }
+
+    /** The error for text that several controls match, listing each by its #n and the text nearest it. */
+    private static IllegalStateException ambiguous(String text, List<? extends Node> matches, List<Node> all) {
+        return new IllegalStateException("%d controls match '%s'; click one by its #n from qupath_describe:\n%s".formatted(
+                matches.size(), text, matches.stream().map(m -> "#%d [near \"%s\"]".formatted(all.indexOf(m), nearestLabel(m)))
+                        .collect(Collectors.joining("\n"))));
     }
 
     /**

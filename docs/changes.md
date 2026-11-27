@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **`qupath_click` prefers a control to a plain label with the same text.** In a form that puts a label before a field and a button with the same text after it, such as `Search [field] [Search]`, `qupath_click("Search")` clicked the label, which does nothing; it now clicks the button.
+- **Text that several controls share is an error, not a guess.** With a **Search** button on each of two rows, `qupath_click("Search")` clicked the first; it now fails and lists both as `#n [near "label"]`, as it already did for tooltips. Repeated text in table and tree cells still clicks the first row.
 
 ## 0.3.0
 

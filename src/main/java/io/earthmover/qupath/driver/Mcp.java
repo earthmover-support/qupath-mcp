@@ -111,8 +111,8 @@ class Mcp {
                         }))),
                 tool("qupath_click", """
                         Click the button, checkbox, label or cell whose text, tooltip or accessible text is exactly `text`, or \
-                        the control qupath_describe tags #n; a titled pane is expanded or collapsed. If several tooltips match, \
-                        the error lists their #n; click repeated text by #n. Returns the action result, so an error popup's text comes back directly.""",
+                        the control qupath_describe tags #n; a titled pane is expanded or collapsed. If several controls match, \
+                        the error lists their #n to click instead. Returns the action result, so an error popup's text comes back directly.""",
                         """
                         {"text":{"description":"Text, tooltip or #n","type":"string"},"window":{"description":"Title substring","type":"string"},\
                         "button":{"description":"right opens the context menu and lists its items","type":"string","enum":["left","right"],"default":"left"},"double":{"type":"boolean","default":false}}""",
