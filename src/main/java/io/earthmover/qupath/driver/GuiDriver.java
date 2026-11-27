@@ -76,6 +76,7 @@ import javafx.stage.Stage;
 import javafx.stage.Window;
 import javafx.stage.WindowEvent;
 import qupath.lib.gui.QuPathGUI;
+import qupath.lib.plugins.workflow.Workflow;
 
 /** Helpers exposed to driver scripts. All methods are meant to be called from a non-FX thread. */
 public class GuiDriver {
@@ -264,11 +265,14 @@ public class GuiDriver {
                 }
             var viewer = qupath.getViewer();
             var data = viewer.getImageData();
-            return sb.append("%s\nimage: %s\ndownsample: %s centre: %s, %s z: %d t: %d\nannotations: %s".formatted(
+            sb.append("%s\nimage: %s\ndownsample: %s centre: %s, %s z: %d t: %d\nannotations: %s".formatted(
                     qupath.getStage().getTitle(), data == null ? null : data.getServer().getPath(),
                     viewer.getDownsampleFactor(), viewer.getCenterPixelX(), viewer.getCenterPixelY(),
                     viewer.getZPosition(), viewer.getTPosition(),
-                    data == null ? null : data.getHierarchy().getAnnotationObjects().size())).toString().strip();
+                    data == null ? null : data.getHierarchy().getAnnotationObjects().size()));
+            if (commandRunning())
+                sb.append('\n').append(COMMAND_RUNNING);
+            return sb.toString().strip();
         });
         if (note)
             noteOutlined(described);
@@ -302,7 +306,31 @@ public class GuiDriver {
         }
         var opened = openedSince(before);
         return (message == null ? "" : message + "\n\n") + windowsText()
-                + "\n\n" + (opened.isEmpty() ? "No new window opened." : "Opened by the action:\n" + opened);
+                + "\n\n" + (opened.isEmpty() ? "No new window opened." : "Opened by the action:\n" + opened)
+                + (fx(this::commandRunning) ? "\n\n" + RUNNING_HINT : "");
+    }
+
+    /** The main-window summary line shown while a command runs. */
+    static final String COMMAND_RUNNING = "command running";
+
+    private static final String RUNNING_HINT = "QuPath is still running a command; qupath_wait text=\"" + COMMAND_RUNNING
+            + "\" gone=true returns when it ends. A parameter dialog stays open after it.";
+
+    /**
+     * Whether QuPath is running a command started from a menu or parameter dialog, or a Script Editor script. Call on
+     * the FX thread: the binding is validated without a lock, so a read from another thread can cache a stale value.
+     */
+    private boolean commandRunning() {
+        return Boolean.TRUE.equals(qupath.uiBlocked().getValue());
+    }
+
+    /**
+     * The current image's history workflow, or null with no image. Call on the FX thread; read its steps under the
+     * workflow's own lock and off the FX thread, because the workflow notifies its listeners while holding that lock.
+     */
+    Workflow historyWorkflow() {
+        var data = qupath.getImageData();
+        return data == null ? null : data.getHistoryWorkflow();
     }
 
     List<Window> windowsNow() throws Exception {

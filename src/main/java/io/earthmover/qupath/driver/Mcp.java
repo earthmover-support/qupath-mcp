@@ -1,5 +1,6 @@
 package io.earthmover.qupath.driver;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
@@ -8,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.concurrent.ExecutionException;
@@ -25,6 +27,8 @@ import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import io.modelcontextprotocol.spec.McpStreamableServerTransportProvider;
 import javafx.stage.Stage;
 import javafx.stage.Window;
+import qupath.lib.plugins.workflow.Workflow;
+import qupath.lib.plugins.workflow.WorkflowStep;
 
 /**
  * The QuPath tools, served through the MCP Java SDK. Tool results are text or a PNG image; a failing tool returns
@@ -37,7 +41,7 @@ class Mcp {
             + "menu, else the focused or latest dialog, else the main window. GUI actions (menu, click, select, set, key, "
             + "close, open) return without waiting for event handlers, so a modal dialog cannot block them; about a second "
             + "later (open waits for the image first) they return the action result: the open windows and an outline of each window the action opened. A "
-            + "result can start with windows that opened or closed since your last call.";
+            + "result can start with windows that opened or closed, and history steps added, since your last call.";
 
     private interface Handler {
         List<Content> call(Map<String, Object> args) throws Exception;
@@ -206,7 +210,7 @@ class Mcp {
             Text outline of a window: one control per line, tagged #n where qupath_click, qupath_select and qupath_set \
             accept it. `control` returns just that control. A [collapsed] titled pane hides its controls until clicked. \
             Tables, lists and trees show `limit` rows from `offset`. Without `window`: every dialog, then a summary of the \
-            main window (image, zoom, centre, annotations).""";
+            main window (image, zoom, centre, annotations, and "command running" while QuPath runs one).""";
 
     private String describe(String window, int offset, int limit) throws Exception {
         var out = driver.outline(window, offset, limit);
@@ -249,6 +253,7 @@ class Mcp {
                     var entry = driver.actions.begin("mcp", who, name, args);
                     var seen = sessions.computeIfAbsent(Objects.requireNonNullElse(exchange.sessionId(), ""), k -> new Seen());
                     var changes = changes(seen);
+                    var stepsBefore = stepsLine("Added to history since your last call: ", newSteps(seen));
                     var outlined = new HashSet<Window>();
                     var listed = new boolean[1];
                     driver.outlined.set(outlined);
@@ -261,7 +266,8 @@ class Mcp {
                                     throw new IllegalArgumentException("%s needs `%s`; see its input schema.".formatted(name, r));
                         // The notice leaves out what the result outlines, so it is built once the handler has run.
                         var result = handler.call(args);
-                        var content = prepend(notice(changes, outlined), result);
+                        var content = append(prepend(notice(changes, outlined, stepsBefore), result),
+                                stepsLine("Added to history: ", newSteps(seen)));
                         entry.done(summary(content));
                         var warning = driver.actions.takeWarning();
                         if (warning != null)
@@ -269,8 +275,10 @@ class Mcp {
                         return CallToolResult.builder().content(content).isError(false).build();
                     } catch (Throwable t) {
                         var cause = t instanceof ExecutionException && t.getCause() != null ? t.getCause() : t;
-                        var message = notice(changes, outlined)
-                                + (cause.getMessage() != null ? cause.getMessage() : cause.toString());
+                        var during = stepsLine("Added to history: ", newSteps(seen));
+                        var message = notice(changes, outlined, stepsBefore)
+                                + (cause.getMessage() != null ? cause.getMessage() : cause.toString())
+                                + (during.isEmpty() ? "" : "\n\n" + during.strip());
                         entry.failed(message);
                         return CallToolResult.builder().addTextContent(message).isError(true).build();
                     } finally {
@@ -289,6 +297,65 @@ class Mcp {
     private static final class Seen {
         final Set<Window> windows = Collections.newSetFromMap(new WeakHashMap<>());
         boolean primed;
+        /** The history workflow the session last looked at, and its last step then; null before the first look. */
+        WeakReference<Workflow> workflow;
+        WorkflowStep lastStep;
+    }
+
+    /**
+     * The names of the history steps added to the current image since the session last looked, recording the newest
+     * as seen. Empty on the session's first look, after the image changed, if the step last seen was removed, or when
+     * the FX thread is busy (the steps are then reported by a later call), so it never fails or holds up a call.
+     */
+    private List<String> newSteps(Seen seen) {
+        try {
+            var current = driver.fxWithin(300, () -> Optional.ofNullable(driver.historyWorkflow()));
+            if (current == null)
+                return List.of();
+            var workflow = current.orElse(null);
+            synchronized (seen) {
+                var known = seen.workflow == null ? null : seen.workflow.get();
+                var last = seen.lastStep;
+                seen.workflow = workflow == null ? null : new WeakReference<>(workflow);
+                seen.lastStep = null;
+                if (workflow == null)
+                    return List.of();
+                List<WorkflowStep> added;
+                synchronized (workflow) {
+                    var steps = workflow.getSteps();
+                    int from;
+                    if (workflow != known)
+                        from = steps.size();
+                    else if (last == null)
+                        from = 0;
+                    else {
+                        int at = indexOf(steps, last);
+                        from = at < 0 ? steps.size() : at + 1;
+                    }
+                    added = List.copyOf(steps.subList(from, steps.size()));
+                    seen.lastStep = steps.isEmpty() ? null : steps.get(steps.size() - 1);
+                }
+                return added.stream().map(WorkflowStep::getName).toList();
+            }
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    /** The index of {@code step} itself, not of an equal one, searching from the newest; -1 if it is gone. */
+    private static int indexOf(List<WorkflowStep> steps, WorkflowStep step) {
+        for (int i = steps.size() - 1; i >= 0; i--)
+            if (steps.get(i) == step)
+                return i;
+        return -1;
+    }
+
+    /** A line naming the steps, at most five, after {@code prefix}; empty if there are none. */
+    private static String stepsLine(String prefix, List<String> names) {
+        if (names.isEmpty())
+            return "";
+        var shown = String.join(", ", names.subList(Math.max(0, names.size() - 5), names.size()));
+        return prefix + (names.size() > 5 ? "%d steps, the last five: %s".formatted(names.size(), shown) : shown) + "\n";
     }
 
     /** The lines reporting stages that opened since the session's previous call, and the titles of those that closed. */
@@ -355,18 +422,30 @@ class Mcp {
     }
 
     /** One line per change the result does not already show, each ending in a newline; empty if nothing changed. */
-    private static String notice(Changes changes, Set<Window> outlined) {
-        if (changes == null)
-            return "";
+    private static String notice(Changes changes, Set<Window> outlined, String steps) {
         var sb = new StringBuilder();
-        changes.opened().forEach((w, line) -> {
-            if (!outlined.contains(w))
-                sb.append(line).append('\n');
-        });
-        if (!changes.closed().isEmpty())
-            sb.append(changes.closed().stream().map(t -> "\"" + t + "\"")
-                    .collect(Collectors.joining(", ", "Closed since your last call: ", "\n")));
+        if (changes != null) {
+            changes.opened().forEach((w, line) -> {
+                if (!outlined.contains(w))
+                    sb.append(line).append('\n');
+            });
+            if (!changes.closed().isEmpty())
+                sb.append(changes.closed().stream().map(t -> "\"" + t + "\"")
+                        .collect(Collectors.joining(", ", "Closed since your last call: ", "\n")));
+        }
+        sb.append(steps);
         return sb.isEmpty() ? "" : sb.append('\n').toString();
+    }
+
+    /** {@code content} with {@code line} added to the end of its last text, after a blank line. */
+    private static List<Content> append(List<Content> content, String line) {
+        if (line.isEmpty())
+            return content;
+        var last = content.isEmpty() ? null : content.get(content.size() - 1);
+        if (last instanceof TextContent t)
+            return Stream.concat(content.stream().limit(content.size() - 1),
+                    Stream.of((Content) new TextContent(t.text() + "\n\n" + line.strip()))).toList();
+        return Stream.concat(content.stream(), Stream.of((Content) new TextContent(line.strip()))).toList();
     }
 
     private static List<Content> prepend(String notice, List<Content> content) {
