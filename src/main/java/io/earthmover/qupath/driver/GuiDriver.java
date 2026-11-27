@@ -17,6 +17,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import javax.imageio.IIOImage;
@@ -363,6 +364,7 @@ public class GuiDriver {
      * {@code Callable} is called after that second, so it can report the state the action's handlers left.
      */
     String act(Callable<?> action) throws Exception {
+        clicked.remove();
         var before = windowsNow();
         var message = action.call();
         Thread.sleep(1000);
@@ -381,7 +383,34 @@ public class GuiDriver {
         var opened = openedSince(before);
         return (message == null ? "" : message + "\n\n") + windowsText()
                 + "\n\n" + (opened.isEmpty() ? "No new window opened." : "Opened by the action:\n" + opened)
-                + runningHint(fx(this::running));
+                + hints(clicked.get());
+    }
+
+    private String hints(Node clickedButton) throws Exception {
+        return fx(() -> {
+            var hint = runningHint(running());
+            return hint.isEmpty() ? disabledHint(clickedButton) : hint;
+        });
+    }
+
+    /** qupath_run_groovy scripts still running, which may outlast the call that started them. */
+    static final AtomicInteger scripts = new AtomicInteger();
+
+    /** The enabled button the current call clicked, for {@link #disabledHint}; set by {@link #click} for the length of a call. */
+    private final ThreadLocal<Node> clicked = new ThreadLocal<>();
+
+    /**
+     * A line saying that the clicked button is still disabled, as many extensions leave their Run button while their
+     * work runs on a thread of their own, and naming the wait that ends when it is enabled again; else an empty string.
+     * Call on the FX thread.
+     */
+    private String disabledHint(Node node) {
+        var window = node == null || node.getScene() == null ? null : node.getScene().getWindow();
+        if (window == null || !window.isShowing() || !node.isDisabled())
+            return "";
+        return ("\n\n%s stayed disabled after the click, so its work may still be running; qupath_wait(text='%s', "
+                + "window=\"%s\", gone=true) returns when it is enabled again.").formatted(
+                line(node, null, true, MAX_TEXT).replace(" [disabled]", ""), line(node, null, true, MAX_TEXT), titleOf(window));
     }
 
     /** The main-window summary line shown while something {@link #running} reports runs. */
@@ -398,14 +427,18 @@ public class GuiDriver {
     private static final String COMMAND_OR_SCRIPT = "A QuPath command or script";
 
     /**
-     * What is running, or null: a command started from a menu or parameter dialog, or a Script Editor script, which
-     * QuPath marks as blocking its UI; else a progress bar or spinner still turning in an open window, which is how many
-     * extensions show work they run on their own threads. Call on the FX thread: the binding is validated without a
-     * lock, so a read from another thread can cache a stale value.
+     * What is running, or null: a command started from a menu or parameter dialog, a Script Editor script, which
+     * QuPath marks as blocking its UI, or a qupath_run_groovy script; else a task showing QuPath's Progress window; else a progress bar or spinner still
+     * turning in an open window, which is how many extensions show work they run on their own threads. Call on the FX
+     * thread: the binding is validated without a lock, so a read from another thread can cache a stale value.
      */
     private String running() {
-        if (Boolean.TRUE.equals(qupath.uiBlocked().getValue()))
+        if (Boolean.TRUE.equals(qupath.uiBlocked().getValue()) || scripts.get() > 0)
             return COMMAND_OR_SCRIPT;
+        // QuPath's own progress window shows only while a task runs, from 0% on.
+        for (var w : Window.getWindows())
+            if (w.isShowing() && w instanceof Stage s && "Progress".equals(s.getTitle()))
+                return "A task with a \"Progress\" window";
         for (var w : Window.getWindows())
             if (w.isShowing() && w.getScene() != null && activeProgress(w.getScene().getRoot()))
                 return "Progress in \"%s\"".formatted(titleOf(w));
@@ -807,6 +840,8 @@ public class GuiDriver {
                 + (node instanceof Labeled l ? " “" + name(l) + "”" : "");
         ActionLog.target(node, action);
         indicator.before(node, action);
+        if (node instanceof ButtonBase && !right && !doubleClick && !fx(node::isDisabled))
+            clicked.set(node);
         Platform.runLater(() -> {
             if (node instanceof ButtonBase b && !right && !doubleClick) {
                 b.fire();

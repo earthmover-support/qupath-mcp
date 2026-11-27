@@ -12,7 +12,10 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.WeakHashMap;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -43,6 +46,15 @@ class Mcp {
             + "later (open waits for the image first) they return the action result: the open windows and an outline of each window the action opened. A "
             + "result can start with windows that opened or closed, and history steps added, since your last call.";
 
+    /**
+     * The longest one tool call waits, in seconds. Most MCP clients give up on a call after 60 s (Claude Code over HTTP,
+     * Codex CLI) and report an error, so a longer wait returns here and is repeated by the agent.
+     */
+    static final double CALL_LIMIT_S = 50;
+
+    /** The calling session's state, for the length of a call. */
+    private final ThreadLocal<Seen> current = new ThreadLocal<>();
+
     private interface Handler {
         List<Content> call(Map<String, Object> args) throws Exception;
     }
@@ -70,11 +82,22 @@ class Mcp {
                         """
                         {"code":{"type":"string"},"timeout_s":{"description":"Seconds before giving up","type":"number","default":60}}""", "code", a -> {
                             driver.indicator.note("running script…");
-                            var r = server.evaluate(str(a, "code"), num(a, "timeout_s", 60));
-                            var output = r.output().isEmpty() ? "" : "output:\n" + r.output() + "\n";
-                            if (!r.ok())
-                                throw new Exception(output + "error:\n" + trim(r.error()));
-                            return text(output + "result: " + r.result());
+                            double timeout = num(a, "timeout_s", 60);
+                            var run = server.evaluateAsync(str(a, "code"), timeout);
+                            if (timeout <= CALL_LIMIT_S)
+                                return text(scriptText(run.join()));
+                            try {
+                                return text(scriptText(run.get((long) (CALL_LIMIT_S * 1000), TimeUnit.MILLISECONDS)));
+                            } catch (TimeoutException e) {
+                                var seen = current.get();
+                                synchronized (seen) {
+                                    seen.scripts.add(run);
+                                }
+                                return text(("The script is still running after %.0f s, so this call returns before MCP clients "
+                                        + "give up on it. It runs for up to timeout_s; its output and result come with your first "
+                                        + "call after it ends, and qupath_wait text=\"%s\" gone=true waits for it.").formatted(
+                                        CALL_LIMIT_S, GuiDriver.COMMAND_RUNNING));
+                            }
                         }),
                 tool("qupath_menu", """
                         Fire a menu item such as "Analyze>Cell detection>Cell detection"; returns the action result. A check \
@@ -142,7 +165,7 @@ class Mcp {
                             var text = str(a, "text");
                             double timeout = num(a, "timeout_s", 30);
                             boolean gone = Boolean.TRUE.equals(a.get("gone"));
-                            long deadline = System.nanoTime() + (long) (timeout * 1e9);
+                            long deadline = System.nanoTime() + (long) (Math.min(timeout, CALL_LIMIT_S) * 1e9);
                             List<Window> before = null;
                             while (true) {
                                 // A task running on the FX thread leaves nothing readable until it ends, so the wait
@@ -161,6 +184,11 @@ class Mcp {
                                 }
                                 boolean done = all != null && all.contains(text) != gone;
                                 if (done || System.nanoTime() >= deadline) {
+                                    if (!done && timeout > CALL_LIMIT_S)
+                                        return text(("Not yet: after %.0f s, '%s' is still %s. This call returns before MCP "
+                                                + "clients give up on it; call qupath_wait again to keep waiting.%s").formatted(
+                                                CALL_LIMIT_S, text, gone ? "there" : "missing",
+                                                busy == null ? "" : " " + busy.getMessage()));
                                     if (busy != null)
                                         throw new Exception("Timed out after %ss waiting for '%s' to %s. %s".formatted(
                                                 timeout, text, gone ? "disappear" : "appear", busy.getMessage()));
@@ -267,6 +295,7 @@ class Mcp {
                     var args = request.arguments() == null ? Map.<String, Object>of() : request.arguments();
                     var entry = driver.actions.begin("mcp", who, name, args);
                     var seen = sessions.computeIfAbsent(Objects.requireNonNullElse(exchange.sessionId(), ""), k -> new Seen());
+                    current.set(seen);
                     var changes = changes(seen);
                     var stepsBefore = stepsLine("Added to history since your last call: ", newSteps(seen));
                     var outlined = new HashSet<Window>();
@@ -281,8 +310,8 @@ class Mcp {
                                     throw new IllegalArgumentException("%s needs `%s`; see its input schema.".formatted(name, r));
                         // The notice leaves out what the result outlines, so it is built once the handler has run.
                         var result = handler.call(args);
-                        var content = append(prepend(notice(changes, outlined, stepsBefore), result),
-                                stepsLine("Added to history: ", newSteps(seen)));
+                        var content = append(append(prepend(notice(changes, outlined, stepsBefore), result),
+                                stepsLine("Added to history: ", newSteps(seen))), finishedScripts(seen));
                         entry.done(summary(content));
                         var warning = driver.actions.takeWarning();
                         if (warning != null)
@@ -291,12 +320,15 @@ class Mcp {
                     } catch (Throwable t) {
                         var cause = t instanceof ExecutionException && t.getCause() != null ? t.getCause() : t;
                         var during = stepsLine("Added to history: ", newSteps(seen));
+                        var finished = finishedScripts(seen);
                         var message = notice(changes, outlined, stepsBefore)
                                 + (cause.getMessage() != null ? cause.getMessage() : cause.toString())
-                                + (during.isEmpty() ? "" : "\n\n" + during.strip());
+                                + (during.isEmpty() ? "" : "\n\n" + during.strip())
+                                + (finished.isEmpty() ? "" : "\n\n" + finished.strip());
                         entry.failed(message);
                         return CallToolResult.builder().addTextContent(message).isError(true).build();
                     } finally {
+                        current.remove();
                         driver.outlined.remove();
                         driver.listed.remove();
                         settle(seen, outlined, listed[0]);
@@ -315,6 +347,26 @@ class Mcp {
         /** The history workflow the session last looked at, and its last step then; null before the first look. */
         WeakReference<Workflow> workflow;
         WorkflowStep lastStep;
+        /** qupath_run_groovy scripts that outlasted their call, whose outcome the session has not been given yet. */
+        final List<CompletableFuture<DriverServer.Evaluation>> scripts = new ArrayList<>();
+    }
+
+    /** The outcome of each of the session's scripts that has ended since its call returned; empty if none has. */
+    private static String finishedScripts(Seen seen) {
+        var sb = new StringBuilder();
+        synchronized (seen) {
+            for (var it = seen.scripts.iterator(); it.hasNext();) {
+                var run = it.next();
+                if (!run.isDone())
+                    continue;
+                it.remove();
+                var r = run.join();
+                var output = r.output().isEmpty() ? "" : "output:\n" + r.output() + "\n";
+                sb.append("A script from an earlier call has ended.\n").append(output)
+                        .append(r.ok() ? "result: " + r.result() : "error:\n" + trim(r.error())).append("\n");
+            }
+        }
+        return sb.toString();
     }
 
     /**
@@ -476,6 +528,14 @@ class Mcp {
         return content.stream().map(c -> c instanceof TextContent t ? t.text()
                 : c instanceof ImageContent i ? "[image " + i.mimeType() + ", " + i.data().length() + " base64 chars]"
                 : "[" + c.type() + "]").collect(Collectors.joining("\n"));
+    }
+
+    /** A script's println output and result; its error is thrown. */
+    private static String scriptText(DriverServer.Evaluation r) throws Exception {
+        var output = r.output().isEmpty() ? "" : "output:\n" + r.output() + "\n";
+        if (!r.ok())
+            throw new Exception(output + "error:\n" + trim(r.error()));
+        return output + "result: " + r.result();
     }
 
     private static List<Content> text(String s) {

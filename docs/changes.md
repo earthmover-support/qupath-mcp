@@ -7,6 +7,8 @@
 - **An agent can tell when work it started has finished.** Cell detection and other commands with a parameter dialog keep running after **Run**, and their dialog stays open. The summary from `qupath_describe` with no `window` ends with `command running` while a command, a Script Editor script, or a progress bar in an open window is running, and an action result that leaves one running says so and names the wait: `qupath_wait(text="command running", gone=True)`. See [Work that keeps running](tools.md#notes).
 - **A task on QuPath's UI thread is reported as busy, not as a native dialog.** While a command such as the pixel classifier's Create objects holds the UI thread, tools say what it is running, and `qupath_wait` keeps polling instead of failing.
 - **`qupath_describe` shows progress bars and spinners**, as `ProgressBar 40%` or `ProgressBar [running]`.
+- **No call waits longer than 50 s**, because most MCP clients end a call after 60 s with an error. A longer `qupath_wait` returns `Not yet: …` to be repeated, and a `qupath_run_groovy` script still running after 50 s keeps running and hands its output and result to a later call. See [Calls longer than a minute](tools.md#notes).
+- **A clicked button that stays disabled is reported**, with the wait that ends when it is enabled again, as InstanSeg's **Run** button stays disabled while it works.
 - **Results report new history steps**, `Added to history: Cell detection`, for steps added during a call and since the agent's last call. A command that fails adds no step.
 
 ## 0.2.0
