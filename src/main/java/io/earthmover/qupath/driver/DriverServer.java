@@ -10,9 +10,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 import org.eclipse.jetty.http.HttpStatus;
@@ -214,34 +212,39 @@ class DriverServer {
 
     /** Evaluates Groovy on its own thread so a hung script times out instead of holding the connection. */
     Evaluation evaluate(String code, double timeout) {
+        return evaluateAsync(code, timeout).join();
+    }
+
+    /**
+     * Starts evaluating Groovy on its own thread, interrupted after {@code timeout} seconds, and returns its outcome
+     * once it ends or times out. The caller may stop waiting for it while it keeps running.
+     */
+    CompletableFuture<Evaluation> evaluateAsync(String code, double timeout) {
         var output = new StringWriter();
         var out = new PrintWriter(output, true);
-        var result = new CompletableFuture<Object>();
+        var done = new CompletableFuture<Evaluation>();
         var entry = ActionLog.current();
         var worker = new Thread(() -> {
             ActionLog.attach(entry);
+            GuiDriver.scripts.incrementAndGet();
             try {
-                result.complete(driver.evaluate(code, out));
+                var value = driver.evaluate(code, out);
+                done.complete(new Evaluation(true, String.valueOf(value), output.toString(), null));
             } catch (Throwable t) {
-                result.completeExceptionally(t);
+                var trace = new StringWriter();
+                t.printStackTrace(new PrintWriter(trace));
+                done.complete(new Evaluation(false, "null", output.toString(), trace.toString()));
+            } finally {
+                GuiDriver.scripts.decrementAndGet();
             }
         }, "qupath-gui-driver-eval");
         worker.setDaemon(true);
         worker.start();
-
-        String value = "null", error = null;
-        try {
-            value = String.valueOf(result.get((long) (timeout * 1000), TimeUnit.MILLISECONDS));
-        } catch (TimeoutException e) {
+        // orTimeout drops its timer when the script ends first, so the timer does not keep the output alive.
+        return done.orTimeout((long) (timeout * 1000), TimeUnit.MILLISECONDS).exceptionally(t -> {
             worker.interrupt();
-            error = "Timed out after " + timeout + "s";
-        } catch (InterruptedException | ExecutionException e) {
-            var trace = new StringWriter();
-            (e instanceof ExecutionException ? e.getCause() : e).printStackTrace(new PrintWriter(trace));
-            error = trace.toString();
-        }
-        out.flush();
-        return new Evaluation(error == null, value, output.toString(), error);
+            return new Evaluation(false, "null", output.toString(), "Timed out after " + timeout + "s");
+        });
     }
 
     static String quote(String s) {

@@ -17,7 +17,9 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
@@ -48,6 +50,7 @@ import javafx.scene.control.ListView;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.PasswordField;
+import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.RadioMenuItem;
 import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.Slider;
@@ -76,6 +79,7 @@ import javafx.stage.Stage;
 import javafx.stage.Window;
 import javafx.stage.WindowEvent;
 import qupath.lib.gui.QuPathGUI;
+import qupath.lib.plugins.workflow.Workflow;
 
 /** Helpers exposed to driver scripts. All methods are meant to be called from a non-FX thread. */
 public class GuiDriver {
@@ -98,6 +102,7 @@ public class GuiDriver {
         this.outDir = new File(outDir);
         this.indicator = new Indicator(qupath);
         this.actions = new ActionLog(qupath);
+        Platform.runLater(() -> fxThread = Thread.currentThread());
     }
 
     /** Evaluates Groovy source (a File or String) with the helpers bound; {@code println} goes to {@code out} if given. */
@@ -184,22 +189,81 @@ public class GuiDriver {
                 .filter(w -> w.isShowing() && w instanceof Stage && titleOf(w).contains(titleSubstring)).toList();
     }
 
-    private static final String NATIVE_DIALOG = "QuPath's UI thread is not responding, so a native dialog (usually a file "
-            + "chooser, which is invisible to qupath_describe) is probably open. Close it in QuPath; to avoid it use "
-            + "qupath_open(path_or_uri) or qupath_run_groovy.";
+    private static final String NATIVE_DIALOG = "A native dialog, usually a file chooser, is open in QuPath; no tool can "
+            + "see or use it. Ask the person to close it; to avoid one, use qupath_open(path_or_uri) or qupath_run_groovy.";
 
-    /** Whether the FX thread picks up work within two seconds; a native file chooser blocks it. */
-    private boolean responsive() throws Exception {
-        if (Platform.isFxApplicationThread())
-            return true;
-        var done = new CompletableFuture<Boolean>();
-        Platform.runLater(() -> done.complete(true));
-        try {
-            done.get(2, TimeUnit.SECONDS);
-            return true;
-        } catch (TimeoutException e) {
-            return false;
+    /** Classes on the FX thread's stack while it shows a native dialog, which only the person can close. */
+    private static final List<String> NATIVE_DIALOG_CLASSES = List.of("com.sun.glass.ui.CommonDialogs", "java.awt.FileDialog");
+
+    private static boolean nativeDialog(Stream<String> classNames) {
+        return classNames.anyMatch(c -> NATIVE_DIALOG_CLASSES.stream().anyMatch(c::startsWith));
+    }
+
+    /** Packages left out when naming the code a busy FX thread is running. */
+    private static final List<String> PLATFORM = List.of("java.", "javax.", "jdk.", "sun.", "com.sun.", "javafx.",
+            "groovy.", "org.codehaus.groovy.", "org.apache.groovy.", GuiDriver.class.getPackageName() + ".");
+
+    /** Classes through which the FX thread hands an event or a queued runnable to the code that handles it. */
+    private static final List<String> DISPATCH = List.of("com.sun.javafx.event.", "com.sun.javafx.application.PlatformImpl",
+            "com.sun.glass.ui.InvokeLaterDispatcher", "com.sun.javafx.tk.quantum.");
+
+    /** The FX thread, recorded at startup, so a busy one can be asked what it is running. */
+    private volatile Thread fxThread;
+
+    /**
+     * The FX thread did not pick up work within two seconds. {@code nativeDialog} says it is showing a native dialog,
+     * which only the person can close; otherwise it is running a long task, such as the pixel classifier's Create
+     * objects, and will be free again when that ends.
+     */
+    static final class UiBusy extends IllegalStateException {
+        final boolean nativeDialog;
+
+        UiBusy(String message, boolean nativeDialog) {
+            super(message);
+            this.nativeDialog = nativeDialog;
         }
+    }
+
+    /**
+     * Throws {@link UiBusy} unless the FX thread picks up work within two seconds and is not showing a native dialog.
+     * On macOS the FX thread keeps handling events under a native file chooser, from a nested event loop, so the check
+     * runs there and looks for the chooser further down its own stack.
+     */
+    private void requireResponsive() throws Exception {
+        if (Platform.isFxApplicationThread())
+            return;
+        var done = new CompletableFuture<Boolean>();
+        Platform.runLater(() -> {
+            done.complete(StackWalker.getInstance().walk(frames -> nativeDialog(frames.map(StackWalker.StackFrame::getClassName))));
+        });
+        boolean nativeDialog;
+        try {
+            nativeDialog = done.get(2, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            throw unresponsive();
+        }
+        if (nativeDialog)
+            throw new UiBusy(NATIVE_DIALOG, true);
+    }
+
+    /** Why the FX thread is not responding, read from its stack: a native dialog, or the code it is running. */
+    private UiBusy unresponsive() {
+        var thread = fxThread;
+        if (thread == null)
+            return new UiBusy(NATIVE_DIALOG, true);
+        var stack = List.of(thread.getStackTrace());
+        if (nativeDialog(stack.stream().map(StackTraceElement::getClassName)))
+            return new UiBusy(NATIVE_DIALOG, true);
+        // Only the frames of the event being handled: below the dispatch frame lies the code that started QuPath. Of
+        // those, the outermost named method is the command (PixelClassifierUI.promptToCreateObjects), not its helper.
+        var own = stack.stream().takeWhile(f -> DISPATCH.stream().noneMatch(f.getClassName()::startsWith))
+                .filter(f -> PLATFORM.stream().noneMatch(f.getClassName()::startsWith)).toList();
+        var where = own.reversed().stream().filter(f -> !f.getMethodName().startsWith("lambda$")).findFirst()
+                .or(() -> own.stream().findFirst())
+                .map(f -> " in " + f.getClassName().substring(f.getClassName().lastIndexOf('.') + 1) + "." + f.getMethodName())
+                .orElse("");
+        return new UiBusy(("QuPath's UI thread is busy%s, so no window can be read or used until it finishes; "
+                + "qupath_wait text=\"%s\" gone=true returns when it does.").formatted(where, COMMAND_RUNNING), false);
     }
 
     /**
@@ -246,8 +310,7 @@ public class GuiDriver {
      * search such as qupath_wait's reads outlines it does not return.
      */
     String outline(String titleSubstring, int offset, int limit, boolean note) throws Exception {
-        if (!responsive())
-            throw new IllegalStateException(NATIVE_DIALOG);
+        requireResponsive();
         var described = new ArrayList<Window>();
         var out = fx(() -> {
             var sb = new StringBuilder();
@@ -264,11 +327,14 @@ public class GuiDriver {
                 }
             var viewer = qupath.getViewer();
             var data = viewer.getImageData();
-            return sb.append("%s\nimage: %s\ndownsample: %s centre: %s, %s z: %d t: %d\nannotations: %s".formatted(
+            sb.append("%s\nimage: %s\ndownsample: %s centre: %s, %s z: %d t: %d\nannotations: %s".formatted(
                     qupath.getStage().getTitle(), data == null ? null : data.getServer().getPath(),
                     viewer.getDownsampleFactor(), viewer.getCenterPixelX(), viewer.getCenterPixelY(),
                     viewer.getZPosition(), viewer.getTPosition(),
-                    data == null ? null : data.getHierarchy().getAnnotationObjects().size())).toString().strip();
+                    data == null ? null : data.getHierarchy().getAnnotationObjects().size()));
+            if (running() != null)
+                sb.append('\n').append(COMMAND_RUNNING);
+            return sb.toString().strip();
         });
         if (note)
             noteOutlined(described);
@@ -290,8 +356,11 @@ public class GuiDriver {
         var before = windowsNow();
         var message = action.call();
         Thread.sleep(1000);
-        if (!responsive())
-            return NATIVE_DIALOG;
+        try {
+            requireResponsive();
+        } catch (UiBusy e) {
+            return e.getMessage();
+        }
         if (message instanceof Callable<?> after) {
             // The action has already happened, so failing to read back its result must not fail the call.
             try {
@@ -302,10 +371,77 @@ public class GuiDriver {
         }
         var opened = openedSince(before);
         return (message == null ? "" : message + "\n\n") + windowsText()
-                + "\n\n" + (opened.isEmpty() ? "No new window opened." : "Opened by the action:\n" + opened);
+                + "\n\n" + (opened.isEmpty() ? "No new window opened." : "Opened by the action:\n" + opened)
+                + fx(() -> runningHint(running()));
+    }
+
+    /** qupath_run_groovy scripts still running, which may outlast the call that started them. */
+    static final AtomicInteger scripts = new AtomicInteger();
+
+    /**
+     * A line saying that a clicked button is still disabled while nothing else is running, as many extensions leave
+     * their Run button while their work runs on a thread of their own, and naming the wait that ends when it is enabled
+     * again; else null. Call on the FX thread.
+     */
+    private String disabledHint(Node node) {
+        var window = node.getScene() == null ? null : node.getScene().getWindow();
+        if (window == null || !window.isShowing() || !node.isDisabled() || running() != null)
+            return null;
+        var line = line(node, null, true, MAX_TEXT);
+        return ("%s stayed disabled after the click, so its work may still be running; qupath_wait(text='%s', "
+                + "window=\"%s\", gone=true) returns when it is enabled again.").formatted(
+                line.replace(" [disabled]", ""), line, titleOf(window));
+    }
+
+    /** The main-window summary line shown while something {@link #running} reports runs. */
+    static final String COMMAND_RUNNING = "command running";
+
+    /** The line an action result ends with when work it started is still running, or an empty string. */
+    private static String runningHint(String running) {
+        if (running == null)
+            return "";
+        var hint = "\n\n%s is still running; qupath_wait text=\"%s\" gone=true returns when it ends.".formatted(running, COMMAND_RUNNING);
+        return running.equals(COMMAND_OR_SCRIPT) ? hint + " A parameter dialog stays open after it." : hint;
+    }
+
+    private static final String COMMAND_OR_SCRIPT = "A QuPath command or script";
+
+    /**
+     * What is running, or null: a command started from a menu or parameter dialog, or a Script Editor script, which
+     * QuPath marks as blocking its UI, or a qupath_run_groovy script; else a task showing QuPath's Progress window; else
+     * a progress bar or spinner still turning in an open window, which is how many extensions show work they run on
+     * their own threads. Call on the FX thread: the binding is validated without a lock, so a read from another thread
+     * can cache a stale value.
+     */
+    private String running() {
+        if (Boolean.TRUE.equals(qupath.uiBlocked().getValue()) || scripts.get() > 0)
+            return COMMAND_OR_SCRIPT;
+        // QuPath's own progress window shows only while a task runs, from 0% on.
+        var stages = showingStages();
+        if (stages.stream().anyMatch(w -> "Progress".equals(titleOf(w))))
+            return "A task with a \"Progress\" window";
+        return stages.stream().filter(w -> w.getScene() != null && activeProgress(w.getScene().getRoot())).findFirst()
+                .map(w -> "Progress in \"%s\"".formatted(titleOf(w))).orElse(null);
+    }
+
+    /** Whether a visible progress bar or spinner under {@code node} is indeterminate or part-way; one at 0% is idle. */
+    private static boolean activeProgress(Node root) {
+        var found = new ArrayList<ProgressIndicator>();
+        findAll(root, ProgressIndicator.class, found);
+        return found.stream().anyMatch(p -> p.getProgress() < 0 || p.getProgress() > 0 && p.getProgress() < 1);
+    }
+
+    /**
+     * The current image's history workflow, or null with no image. Call on the FX thread; read its steps under the
+     * workflow's own lock and off the FX thread, because the workflow notifies its listeners while holding that lock.
+     */
+    Workflow historyWorkflow() {
+        var data = qupath.getImageData();
+        return data == null ? null : data.getHistoryWorkflow();
     }
 
     List<Window> windowsNow() throws Exception {
+        requireResponsive();
         return fx(() -> new ArrayList<>(Window.getWindows()));
     }
 
@@ -681,8 +817,11 @@ public class GuiDriver {
                 + (node instanceof Labeled l ? " “" + name(l) + "”" : "");
         ActionLog.target(node, action);
         indicator.before(node, action);
+        // Set on the FX thread as the button fires, and read there once the action has had its second.
+        var wasEnabled = new boolean[1];
         Platform.runLater(() -> {
             if (node instanceof ButtonBase b && !right && !doubleClick) {
+                wasEnabled[0] = !b.isDisabled();
                 b.fire();
                 return;
             }
@@ -702,7 +841,8 @@ public class GuiDriver {
                             false, true, null));
         });
         indicator.mark(node, action);
-        return null;
+        return node instanceof ButtonBase && !right && !doubleClick
+                ? () -> fx(() -> wasEnabled[0] ? disabledHint(node) : null) : null;
     }
 
     /**
@@ -825,8 +965,7 @@ public class GuiDriver {
 
     /** The showing stage whose title contains {@code titleSubstring}; if null, an open context menu, else the focused or latest non-main stage, else the main one. */
     public Window window(String titleSubstring) throws Exception {
-        if (!responsive())
-            throw new IllegalStateException(NATIVE_DIALOG);
+        requireResponsive();
         Window found = fx(() -> {
             var stages = Window.getWindows().stream().filter(w -> w.isShowing() && w instanceof Stage).toList();
             if (titleSubstring != null)
@@ -919,8 +1058,7 @@ public class GuiDriver {
      * qupath_select pick them: a {@code #n}, or the text of the label next to it.
      */
     public String describe(Window window, String control, int offset, int limit) throws Exception {
-        if (!responsive())
-            throw new IllegalStateException(NATIVE_DIALOG);
+        requireResponsive();
         return fx(() -> {
             var matches = controls(window, control);
             if (matches.isEmpty())
@@ -1120,6 +1258,11 @@ public class GuiDriver {
             var tab = node instanceof TabPane tp ? tp.getSelectionModel().getSelectedItem() : null;
             if (tab != null && tab.getContent() != null)
                 describe(tab.getContent(), depth + 1, page);
+            return;
+        }
+        if (node instanceof ProgressIndicator p) {
+            sb.append("  ".repeat(depth)).append(p.getClass().getSimpleName()).append(p.getProgress() < 0 ? " [running]"
+                    : " %.0f%%".formatted(Math.min(1, p.getProgress()) * 100)).append('\n');
             return;
         }
         if (node instanceof Labeled l && l.getText() != null && !l.getText().isBlank() && !"Glyph".equals(l.getClass().getSimpleName())) {

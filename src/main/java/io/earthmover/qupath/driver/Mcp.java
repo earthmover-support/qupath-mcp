@@ -1,5 +1,6 @@
 package io.earthmover.qupath.driver;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
@@ -8,9 +9,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.WeakHashMap;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -25,6 +30,8 @@ import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import io.modelcontextprotocol.spec.McpStreamableServerTransportProvider;
 import javafx.stage.Stage;
 import javafx.stage.Window;
+import qupath.lib.plugins.workflow.Workflow;
+import qupath.lib.plugins.workflow.WorkflowStep;
 
 /**
  * The QuPath tools, served through the MCP Java SDK. Tool results are text or a PNG image; a failing tool returns
@@ -37,7 +44,16 @@ class Mcp {
             + "menu, else the focused or latest dialog, else the main window. GUI actions (menu, click, select, set, key, "
             + "close, open) return without waiting for event handlers, so a modal dialog cannot block them; about a second "
             + "later (open waits for the image first) they return the action result: the open windows and an outline of each window the action opened. A "
-            + "result can start with windows that opened or closed since your last call.";
+            + "result can start with windows that opened or closed, and history steps added, since your last call.";
+
+    /**
+     * The longest one tool call waits, in seconds. Most MCP clients give up on a call after 60 s (Claude Code over HTTP,
+     * Codex CLI) and report an error, so a longer wait returns here and is repeated by the agent.
+     */
+    static final double CALL_LIMIT_S = 50;
+
+    /** The calling session's state, for the length of a call. */
+    private final ThreadLocal<Seen> current = new ThreadLocal<>();
 
     private interface Handler {
         List<Content> call(Map<String, Object> args) throws Exception;
@@ -66,11 +82,22 @@ class Mcp {
                         """
                         {"code":{"type":"string"},"timeout_s":{"description":"Seconds before giving up","type":"number","default":60}}""", "code", a -> {
                             driver.indicator.note("running script…");
-                            var r = server.evaluate(str(a, "code"), num(a, "timeout_s", 60));
-                            var output = r.output().isEmpty() ? "" : "output:\n" + r.output() + "\n";
-                            if (!r.ok())
-                                throw new Exception(output + "error:\n" + trim(r.error()));
-                            return text(output + "result: " + r.result());
+                            double timeout = num(a, "timeout_s", 60);
+                            var run = server.evaluateAsync(str(a, "code"), timeout);
+                            if (timeout <= CALL_LIMIT_S)
+                                return text(scriptText(run.join()));
+                            try {
+                                return text(scriptText(run.get((long) (CALL_LIMIT_S * 1000), TimeUnit.MILLISECONDS)));
+                            } catch (TimeoutException e) {
+                                var seen = current.get();
+                                synchronized (seen) {
+                                    seen.scripts.add(run);
+                                }
+                                return text(("The script is still running after %.0f s, so this call returns before MCP clients "
+                                        + "give up on it. It runs for up to timeout_s; its output and result come with your first "
+                                        + "call after it ends, and qupath_wait text=\"%s\" gone=true waits for it.").formatted(
+                                        CALL_LIMIT_S, GuiDriver.COMMAND_RUNNING));
+                            }
                         }),
                 tool("qupath_menu", """
                         Fire a menu item such as "Analyze>Cell detection>Cell detection"; returns the action result. A check \
@@ -138,14 +165,34 @@ class Mcp {
                             var text = str(a, "text");
                             double timeout = num(a, "timeout_s", 30);
                             boolean gone = Boolean.TRUE.equals(a.get("gone"));
-                            long deadline = System.nanoTime() + (long) (timeout * 1e9);
-                            var before = driver.windowsNow();
+                            long deadline = System.nanoTime() + (long) (Math.min(timeout, CALL_LIMIT_S) * 1e9);
+                            List<Window> before = null;
                             while (true) {
-                                // Matched against every row, so an item far down a long table counts once it is there.
-                                var all = driver.outline(str(a, "window"), 0, GuiDriver.ALL, false);
-                                boolean done = all.contains(text) != gone;
+                                // A task running on the FX thread leaves nothing readable until it ends, so the wait
+                                // goes on; only a native dialog, which the person has to close, ends it early.
+                                String all = null;
+                                GuiDriver.UiBusy busy = null;
+                                try {
+                                    if (before == null)
+                                        before = driver.windowsNow();
+                                    // Matched against every row, so an item far down a long table counts once it is there.
+                                    all = driver.outline(str(a, "window"), 0, GuiDriver.ALL, false);
+                                } catch (GuiDriver.UiBusy e) {
+                                    if (e.nativeDialog)
+                                        throw e;
+                                    busy = e;
+                                }
+                                boolean done = all != null && all.contains(text) != gone;
                                 if (done || System.nanoTime() >= deadline) {
-                                    var opened = driver.openedSince(before);
+                                    if (!done && timeout > CALL_LIMIT_S)
+                                        return text(("Not yet: after %.0f s, '%s' is still %s. This call returns before MCP "
+                                                + "clients give up on it; call qupath_wait again to keep waiting.%s").formatted(
+                                                CALL_LIMIT_S, text, gone ? "there" : "missing",
+                                                busy == null ? "" : " " + busy.getMessage()));
+                                    if (busy != null)
+                                        throw new Exception("Timed out after %ss waiting for '%s' to %s. %s".formatted(
+                                                timeout, text, gone ? "disappear" : "appear", busy.getMessage()));
+                                    var opened = before == null ? "" : driver.openedSince(before);
                                     opened = opened.isEmpty() ? "" : "\n\nOpened while waiting:\n" + opened;
                                     if (done)
                                         return text((gone ? "'%s' is gone".formatted(text) : matching(all, text))
@@ -206,7 +253,7 @@ class Mcp {
             Text outline of a window: one control per line, tagged #n where qupath_click, qupath_select and qupath_set \
             accept it. `control` returns just that control. A [collapsed] titled pane hides its controls until clicked. \
             Tables, lists and trees show `limit` rows from `offset`. Without `window`: every dialog, then a summary of the \
-            main window (image, zoom, centre, annotations).""";
+            main window (image, zoom, centre, annotations, and "command running" while a command, script or progress bar runs).""";
 
     private String describe(String window, int offset, int limit) throws Exception {
         var out = driver.outline(window, offset, limit);
@@ -248,7 +295,9 @@ class Mcp {
                     var args = request.arguments() == null ? Map.<String, Object>of() : request.arguments();
                     var entry = driver.actions.begin("mcp", who, name, args);
                     var seen = sessions.computeIfAbsent(Objects.requireNonNullElse(exchange.sessionId(), ""), k -> new Seen());
+                    current.set(seen);
                     var changes = changes(seen);
+                    var stepsBefore = stepsLine("Added to history since your last call: ", newSteps(seen));
                     var outlined = new HashSet<Window>();
                     var listed = new boolean[1];
                     driver.outlined.set(outlined);
@@ -261,7 +310,7 @@ class Mcp {
                                     throw new IllegalArgumentException("%s needs `%s`; see its input schema.".formatted(name, r));
                         // The notice leaves out what the result outlines, so it is built once the handler has run.
                         var result = handler.call(args);
-                        var content = prepend(notice(changes, outlined), result);
+                        var content = append(prepend(notice(changes, outlined, stepsBefore), result), tail(seen));
                         entry.done(summary(content));
                         var warning = driver.actions.takeWarning();
                         if (warning != null)
@@ -269,11 +318,14 @@ class Mcp {
                         return CallToolResult.builder().content(content).isError(false).build();
                     } catch (Throwable t) {
                         var cause = t instanceof ExecutionException && t.getCause() != null ? t.getCause() : t;
-                        var message = notice(changes, outlined)
-                                + (cause.getMessage() != null ? cause.getMessage() : cause.toString());
+                        var tail = tail(seen);
+                        var message = notice(changes, outlined, stepsBefore)
+                                + (cause.getMessage() != null ? cause.getMessage() : cause.toString())
+                                + (tail.isEmpty() ? "" : "\n\n" + tail);
                         entry.failed(message);
                         return CallToolResult.builder().addTextContent(message).isError(true).build();
                     } finally {
+                        current.remove();
                         driver.outlined.remove();
                         driver.listed.remove();
                         settle(seen, outlined, listed[0]);
@@ -289,6 +341,82 @@ class Mcp {
     private static final class Seen {
         final Set<Window> windows = Collections.newSetFromMap(new WeakHashMap<>());
         boolean primed;
+        /** The history workflow the session last looked at, and its last step then; null before the first look. */
+        WeakReference<Workflow> workflow;
+        WorkflowStep lastStep;
+        /** qupath_run_groovy scripts that outlasted their call, whose outcome the session has not been given yet. */
+        final List<CompletableFuture<DriverServer.Evaluation>> scripts = new ArrayList<>();
+    }
+
+    /** The outcome of each of the session's scripts that has ended since its call returned; empty if none has. */
+    private static String finishedScripts(Seen seen) {
+        var sb = new StringBuilder();
+        synchronized (seen) {
+            for (var it = seen.scripts.iterator(); it.hasNext();) {
+                var run = it.next();
+                if (!run.isDone())
+                    continue;
+                it.remove();
+                sb.append("A script from an earlier call has ended.\n").append(scriptBody(run.join())).append("\n");
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * The names of the history steps added to the current image since the session last looked, recording the newest
+     * as seen. Empty on the session's first look, after the image changed, if the step last seen was removed, or when
+     * the FX thread is busy (the steps are then reported by a later call), so it never fails or holds up a call.
+     */
+    private List<String> newSteps(Seen seen) {
+        try {
+            var current = driver.fxWithin(300, () -> Optional.ofNullable(driver.historyWorkflow()));
+            if (current == null)
+                return List.of();
+            var workflow = current.orElse(null);
+            synchronized (seen) {
+                var known = seen.workflow == null ? null : seen.workflow.get();
+                var last = seen.lastStep;
+                seen.workflow = workflow == null ? null : new WeakReference<>(workflow);
+                seen.lastStep = null;
+                if (workflow == null)
+                    return List.of();
+                List<WorkflowStep> added;
+                synchronized (workflow) {
+                    var steps = workflow.getSteps();
+                    int from;
+                    if (workflow != known)
+                        from = steps.size();
+                    else if (last == null)
+                        from = 0;
+                    else {
+                        int at = indexOf(steps, last);
+                        from = at < 0 ? steps.size() : at + 1;
+                    }
+                    added = List.copyOf(steps.subList(from, steps.size()));
+                    seen.lastStep = steps.isEmpty() ? null : steps.get(steps.size() - 1);
+                }
+                return added.stream().map(WorkflowStep::getName).toList();
+            }
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    /** The index of {@code step} itself, not of an equal one, searching from the newest; -1 if it is gone. */
+    private static int indexOf(List<WorkflowStep> steps, WorkflowStep step) {
+        for (int i = steps.size() - 1; i >= 0; i--)
+            if (steps.get(i) == step)
+                return i;
+        return -1;
+    }
+
+    /** A line naming the steps, at most five, after {@code prefix}; empty if there are none. */
+    private static String stepsLine(String prefix, List<String> names) {
+        if (names.isEmpty())
+            return "";
+        var shown = String.join(", ", names.subList(Math.max(0, names.size() - 5), names.size()));
+        return prefix + (names.size() > 5 ? "%d steps, the last five: %s".formatted(names.size(), shown) : shown) + "\n";
     }
 
     /** The lines reporting stages that opened since the session's previous call, and the titles of those that closed. */
@@ -355,18 +483,30 @@ class Mcp {
     }
 
     /** One line per change the result does not already show, each ending in a newline; empty if nothing changed. */
-    private static String notice(Changes changes, Set<Window> outlined) {
-        if (changes == null)
-            return "";
+    private static String notice(Changes changes, Set<Window> outlined, String steps) {
         var sb = new StringBuilder();
-        changes.opened().forEach((w, line) -> {
-            if (!outlined.contains(w))
-                sb.append(line).append('\n');
-        });
-        if (!changes.closed().isEmpty())
-            sb.append(changes.closed().stream().map(t -> "\"" + t + "\"")
-                    .collect(Collectors.joining(", ", "Closed since your last call: ", "\n")));
+        if (changes != null) {
+            changes.opened().forEach((w, line) -> {
+                if (!outlined.contains(w))
+                    sb.append(line).append('\n');
+            });
+            if (!changes.closed().isEmpty())
+                sb.append(changes.closed().stream().map(t -> "\"" + t + "\"")
+                        .collect(Collectors.joining(", ", "Closed since your last call: ", "\n")));
+        }
+        sb.append(steps);
         return sb.isEmpty() ? "" : sb.append('\n').toString();
+    }
+
+    /** {@code content} with {@code line} added to the end of its last text, after a blank line. */
+    private static List<Content> append(List<Content> content, String line) {
+        if (line.isEmpty())
+            return content;
+        var last = content.isEmpty() ? null : content.get(content.size() - 1);
+        if (last instanceof TextContent t)
+            return Stream.concat(content.stream().limit(content.size() - 1),
+                    Stream.of((Content) new TextContent(t.text() + "\n\n" + line.strip()))).toList();
+        return Stream.concat(content.stream(), Stream.of((Content) new TextContent(line.strip()))).toList();
     }
 
     private static List<Content> prepend(String notice, List<Content> content) {
@@ -382,6 +522,28 @@ class Mcp {
         return content.stream().map(c -> c instanceof TextContent t ? t.text()
                 : c instanceof ImageContent i ? "[image " + i.mimeType() + ", " + i.data().length() + " base64 chars]"
                 : "[" + c.type() + "]").collect(Collectors.joining("\n"));
+    }
+
+    /** A script's println output and result; its error is thrown. */
+    private static String scriptText(DriverServer.Evaluation r) throws Exception {
+        if (!r.ok())
+            throw new Exception(scriptBody(r));
+        return scriptBody(r);
+    }
+
+    /** A script's println output, then its result or its error. */
+    private static String scriptBody(DriverServer.Evaluation r) {
+        var output = r.output().isEmpty() ? "" : "output:\n" + r.output() + "\n";
+        return output + (r.ok() ? "result: " + r.result() : "error:\n" + trim(r.error()));
+    }
+
+    /**
+     * What a result ends with: the history steps added during the call, then the outcome of the session's scripts that
+     * ended since their call returned; empty if there are none.
+     */
+    private String tail(Seen seen) {
+        return Stream.of(stepsLine("Added to history: ", newSteps(seen)), finishedScripts(seen))
+                .map(String::strip).filter(t -> !t.isEmpty()).collect(Collectors.joining("\n\n"));
     }
 
     private static List<Content> text(String s) {
