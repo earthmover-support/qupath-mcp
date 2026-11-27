@@ -1,6 +1,12 @@
 # Changes
 
-## Unreleased
+## 0.3.0
+
+### If you're upgrading from 0.2.0
+
+- **No call waits longer than 50 s.** A `qupath_wait` with a `timeout_s` above 50 returns `Not yet: …` after 50 s, as a normal result rather than an error, and is repeated to keep waiting. A `qupath_run_groovy` script with a `timeout_s` above 50 that is still running after 50 s returns a note saying so; it keeps running, and its output and result come with a later call. A script or prompt that relied on one long call needs to repeat it.
+- **The native-dialog message changed** to `A native dialog, usually a file chooser, is open in QuPath; …`, and a busy UI thread now gives `QuPath's UI thread is busy in …` instead. Anything that matched the old text needs updating.
+- **Outlines gain lines:** `qupath_describe` shows progress bars and spinners, the main-window summary can end with `command running`, and results can start or end with history and script lines.
 
 ### Knowing what happened
 
