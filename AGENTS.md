@@ -38,3 +38,11 @@ The server instructions, each tool's description and schema (about 200 tokens a 
 - Defaults are the safe choice; say why when it isn't obvious.
 - When behaviour or a menu path changes, update every mention: docs, README, tooltips, tool descriptions.
 - State only what you checked in a running QuPath; numbers come from the code or a measurement.
+
+## Finish a release: tag, notes, catalog
+
+Follow [Releasing](docs/contributing.md#releasing). A release is not done until its catalog entry is merged: QuPath's extension manager offers only what `catalog.json` lists, so a tagged release without an entry reaches no one.
+
+1. A PR that sets the version in `build.gradle.kts` and turns the Unreleased section of `docs/changes.md` into the version's section, led by what changes for someone upgrading.
+2. Once it is merged, tag `v<version>`. The release workflow builds and attaches the jar; replace the generated release notes with the version's section of Changes.
+3. Once the jar is attached, a PR adding it to `catalog.json`, newest first, in the same session. Say that QuPath offers the release only after this PR is merged, and hold it open if the person wants several releases to go out together.
