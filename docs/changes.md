@@ -5,7 +5,7 @@
 ### Knowing what happened
 
 - **An agent can tell when a command started from a dialog has finished.** A command with a parameter dialog, such as Cell detection, keeps running after **Run**, and its dialog stays open. The action result now says so and names the wait: `qupath_wait(text="command running", gone=True)`, which ends on the `command running` line in the main-window summary. See [Commands that keep running](tools.md#notes).
-- **Results report new history steps**, `Added to history: Cell detection`, for steps added during a call and since the agent's last call. A step is only added when a command succeeds.
+- **Results report new history steps**, `Added to history: Cell detection`, for steps added during a call and since the agent's last call. A command that fails adds no step.
 
 ## 0.2.0
 
