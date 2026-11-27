@@ -310,8 +310,7 @@ class Mcp {
                                     throw new IllegalArgumentException("%s needs `%s`; see its input schema.".formatted(name, r));
                         // The notice leaves out what the result outlines, so it is built once the handler has run.
                         var result = handler.call(args);
-                        var content = append(append(prepend(notice(changes, outlined, stepsBefore), result),
-                                stepsLine("Added to history: ", newSteps(seen))), finishedScripts(seen));
+                        var content = append(prepend(notice(changes, outlined, stepsBefore), result), tail(seen));
                         entry.done(summary(content));
                         var warning = driver.actions.takeWarning();
                         if (warning != null)
@@ -319,12 +318,10 @@ class Mcp {
                         return CallToolResult.builder().content(content).isError(false).build();
                     } catch (Throwable t) {
                         var cause = t instanceof ExecutionException && t.getCause() != null ? t.getCause() : t;
-                        var during = stepsLine("Added to history: ", newSteps(seen));
-                        var finished = finishedScripts(seen);
+                        var tail = tail(seen);
                         var message = notice(changes, outlined, stepsBefore)
                                 + (cause.getMessage() != null ? cause.getMessage() : cause.toString())
-                                + (during.isEmpty() ? "" : "\n\n" + during.strip())
-                                + (finished.isEmpty() ? "" : "\n\n" + finished.strip());
+                                + (tail.isEmpty() ? "" : "\n\n" + tail);
                         entry.failed(message);
                         return CallToolResult.builder().addTextContent(message).isError(true).build();
                     } finally {
@@ -360,10 +357,7 @@ class Mcp {
                 if (!run.isDone())
                     continue;
                 it.remove();
-                var r = run.join();
-                var output = r.output().isEmpty() ? "" : "output:\n" + r.output() + "\n";
-                sb.append("A script from an earlier call has ended.\n").append(output)
-                        .append(r.ok() ? "result: " + r.result() : "error:\n" + trim(r.error())).append("\n");
+                sb.append("A script from an earlier call has ended.\n").append(scriptBody(run.join())).append("\n");
             }
         }
         return sb.toString();
@@ -532,10 +526,24 @@ class Mcp {
 
     /** A script's println output and result; its error is thrown. */
     private static String scriptText(DriverServer.Evaluation r) throws Exception {
-        var output = r.output().isEmpty() ? "" : "output:\n" + r.output() + "\n";
         if (!r.ok())
-            throw new Exception(output + "error:\n" + trim(r.error()));
-        return output + "result: " + r.result();
+            throw new Exception(scriptBody(r));
+        return scriptBody(r);
+    }
+
+    /** A script's println output, then its result or its error. */
+    private static String scriptBody(DriverServer.Evaluation r) {
+        var output = r.output().isEmpty() ? "" : "output:\n" + r.output() + "\n";
+        return output + (r.ok() ? "result: " + r.result() : "error:\n" + trim(r.error()));
+    }
+
+    /**
+     * What a result ends with: the history steps added during the call, then the outcome of the session's scripts that
+     * ended since their call returned; empty if there are none.
+     */
+    private String tail(Seen seen) {
+        return Stream.of(stepsLine("Added to history: ", newSteps(seen)), finishedScripts(seen))
+                .map(String::strip).filter(t -> !t.isEmpty()).collect(Collectors.joining("\n\n"));
     }
 
     private static List<Content> text(String s) {

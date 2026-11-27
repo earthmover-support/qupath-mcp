@@ -229,12 +229,10 @@ class DriverServer {
             GuiDriver.scripts.incrementAndGet();
             try {
                 var value = driver.evaluate(code, out);
-                out.flush();
                 done.complete(new Evaluation(true, String.valueOf(value), output.toString(), null));
             } catch (Throwable t) {
                 var trace = new StringWriter();
                 t.printStackTrace(new PrintWriter(trace));
-                out.flush();
                 done.complete(new Evaluation(false, "null", output.toString(), trace.toString()));
             } finally {
                 GuiDriver.scripts.decrementAndGet();
@@ -242,12 +240,11 @@ class DriverServer {
         }, "qupath-gui-driver-eval");
         worker.setDaemon(true);
         worker.start();
-        CompletableFuture.delayedExecutor((long) (timeout * 1000), TimeUnit.MILLISECONDS).execute(() -> {
-            out.flush();
-            if (done.complete(new Evaluation(false, "null", output.toString(), "Timed out after " + timeout + "s")))
-                worker.interrupt();
+        // orTimeout drops its timer when the script ends first, so the timer does not keep the output alive.
+        return done.orTimeout((long) (timeout * 1000), TimeUnit.MILLISECONDS).exceptionally(t -> {
+            worker.interrupt();
+            return new Evaluation(false, "null", output.toString(), "Timed out after " + timeout + "s");
         });
-        return done;
     }
 
     static String quote(String s) {
